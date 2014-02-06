@@ -20,9 +20,6 @@
 #include <linux/workqueue.h>
 #include <linux/cpumask.h>
 #include <asm/div64.h>
-#ifdef CONFIG_CPUFREQ_HARDLIMIT
-#include <linux/cpufreq_hardlimit.h>
-#endif
 
 #define CPUFREQ_NAME_LEN 16
 
@@ -113,14 +110,8 @@ struct cpufreq_policy {
 
 	struct cpufreq_real_policy	user_policy;
 
-	struct kobject		*kobj;
+	struct kobject		kobj;
 	struct completion	kobj_unregister;
-};
-
-/* contains per cpu sysfs info ./sys/devices/ssytem/cpu/cpu#/cpufreq */
-struct cpufreq_cpu_sysinfo {
-	struct cpufreq_policy *cpu_policy; /* policy for online cpu */
-	struct kobject cpu_kobj; /* per cpu kobject */
 };
 
 #define CPUFREQ_ADJUST		(0)
@@ -275,9 +266,6 @@ void cpufreq_notify_utilization(struct cpufreq_policy *policy,
 
 static inline void cpufreq_verify_within_limits(struct cpufreq_policy *policy, unsigned int min, unsigned int max)
 {
-#ifdef CONFIG_CPUFREQ_HARDLIMIT
-	max = check_cpufreq_hardlimit(max); /* Yank555.lu - Enforce hardlimit */
-#endif
 	if (policy->min < min)
 		policy->min = min;
 	if (policy->max < min)
@@ -307,7 +295,7 @@ __ATTR(_name, _perm, show_##_name, NULL)
 
 #define cpufreq_freq_attr_rw(_name)		\
 static struct freq_attr _name =			\
-__ATTR(_name, 0644, show_##_name, store_##_name)
+__ATTR(_name, 0666, show_##_name, store_##_name)
 
 struct global_attr {
 	struct attribute attr;
@@ -323,7 +311,7 @@ __ATTR(_name, 0444, show_##_name, NULL)
 
 #define define_one_global_rw(_name)		\
 static struct global_attr _name =		\
-__ATTR(_name, 0644, show_##_name, store_##_name)
+__ATTR(_name, 0666, show_##_name, store_##_name)
 
 
 /*********************************************************************
@@ -438,15 +426,6 @@ extern struct cpufreq_governor cpufreq_gov_conservative;
 #elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE)
 extern struct cpufreq_governor cpufreq_gov_interactive;
 #define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_interactive)
-#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_INTELLIDEMAND)
-extern struct cpufreq_governor cpufreq_gov_intellidemand;
-#define CPUFREQ_DEFAULT_GOVERNOR        (&cpufreq_gov_intellidemand)
-#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVEX)
-extern struct cpufreq_governor cpufreq_gov_conservativex;
-#define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_conservativex)
-#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_LIONHEART)
-extern struct cpufreq_governor cpufreq_gov_lionheart;
-#define CPUFREQ_DEFAULT_GOVERNOR  (&cpufreq_gov_lionheart)
 #endif
 
 

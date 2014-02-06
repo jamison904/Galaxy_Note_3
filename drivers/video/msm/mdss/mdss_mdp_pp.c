@@ -19,6 +19,8 @@
 #include <linux/uaccess.h>
 #include <linux/spinlock.h>
 #include <linux/delay.h>
+#include <mach/msm_bus.h>
+#include <mach/msm_bus_board.h>
 
 #ifdef CONFIG_FB_MSM_CAMERA_CSC
 struct mdp_csc_cfg mdp_csc_convert_wideband = {
@@ -240,6 +242,27 @@ static u32 igc_limited[IGC_LUT_ENTRIES] = {
 #define SHARP_EDGE_THR_DEFAULT	112
 #define SHARP_SMOOTH_THR_DEFAULT	8
 #define SHARP_NOISE_THR_DEFAULT	2
+
+#define MDP_PP_BUS_VECTOR_ENTRY(ab_val, ib_val)		\
+	{						\
+		.src = MSM_BUS_MASTER_SPDM,		\
+		.dst = MSM_BUS_SLAVE_IMEM_CFG,		\
+		.ab = (ab_val),				\
+		.ib = (ib_val),				\
+	}
+
+#define SZ_37_5M (37500000 * 8)
+
+static struct msm_bus_vectors mdp_pp_bus_vectors[] = {
+	MDP_PP_BUS_VECTOR_ENTRY(0, 0),
+	MDP_PP_BUS_VECTOR_ENTRY(0, SZ_37_5M),
+};
+static struct msm_bus_paths mdp_pp_bus_usecases[ARRAY_SIZE(mdp_pp_bus_vectors)];
+static struct msm_bus_scale_pdata mdp_pp_bus_scale_table = {
+	.usecase = mdp_pp_bus_usecases,
+	.num_usecases = ARRAY_SIZE(mdp_pp_bus_usecases),
+	.name = "mdss_pp",
+};
 
 struct mdss_pp_res_type {
 	/* logical info */
@@ -1296,6 +1319,7 @@ int mdss_mdp_pp_init(struct device *dev)
 	int i, ret = 0;
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
 	struct mdss_mdp_pipe *vig;
+	struct msm_bus_scale_pdata *pp_bus_pdata;
 
 	mutex_lock(&mdss_pp_mutex);
 	if (!mdss_pp_res) {
@@ -1317,12 +1341,34 @@ int mdss_mdp_pp_init(struct device *dev)
 			mutex_init(&vig[i].pp_res.hist.hist_mutex);
 			spin_lock_init(&vig[i].pp_res.hist.hist_lock);
 		}
+		if (!mdata->pp_bus_hdl) {
+			pp_bus_pdata = &mdp_pp_bus_scale_table;
+			for (i = 0; i < pp_bus_pdata->num_usecases; i++) {
+				mdp_pp_bus_usecases[i].num_paths = 1;
+				mdp_pp_bus_usecases[i].vectors =
+					&mdp_pp_bus_vectors[i];
+			}
+
+			mdata->pp_bus_hdl =
+				msm_bus_scale_register_client(pp_bus_pdata);
+			if (!mdata->pp_bus_hdl) {
+				pr_err("not able to register pp_bus_scale\n");
+				ret = -ENOMEM;
+			}
+			pr_debug("register pp_bus_hdl=%x\n", mdata->pp_bus_hdl);
+		}
+
 	}
 	mutex_unlock(&mdss_pp_mutex);
 	return ret;
 }
 void mdss_mdp_pp_term(struct device *dev)
 {
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+	if (mdata->pp_bus_hdl) {
+		msm_bus_scale_unregister_client(mdata->pp_bus_hdl);
+		mdata->pp_bus_hdl = 0;
+	}
 	if (!mdss_pp_res) {
 		mutex_lock(&mdss_pp_mutex);
 		devm_kfree(dev, mdss_pp_res);
@@ -2516,13 +2562,13 @@ int mdss_mdp_hist_collect(struct mdss_mdp_ctl *ctl,
 			if (ret)
 				goto hist_collect_exit;
 		}
+		if (hist->bin_cnt != HIST_V_SIZE) {
+			pr_err("User not expecting size %d output",
+							HIST_V_SIZE);
+			ret = -EINVAL;
+			goto hist_collect_exit;
+		}
 		if (hist_cnt > 1) {
-			if (hist->bin_cnt != HIST_V_SIZE) {
-				pr_err("User not expecting size %d output",
-								HIST_V_SIZE);
-				ret = -EINVAL;
-				goto hist_collect_exit;
-			}
 			hist_concat = kmalloc(HIST_V_SIZE * sizeof(u32),
 								GFP_KERNEL);
 			if (!hist_concat) {
@@ -2586,13 +2632,14 @@ int mdss_mdp_hist_collect(struct mdss_mdp_ctl *ctl,
 			if (ret)
 				goto hist_collect_exit;
 		}
+		if (pipe_cnt != 0 &&
+			(hist->bin_cnt != (HIST_V_SIZE * pipe_cnt))) {
+			pr_err("User not expecting size %d output",
+						pipe_cnt * HIST_V_SIZE);
+			ret = -EINVAL;
+			goto hist_collect_exit;
+		}
 		if (pipe_cnt > 1) {
-			if (hist->bin_cnt != (HIST_V_SIZE * pipe_cnt)) {
-				pr_err("User not expecting size %d output",
-							pipe_cnt * HIST_V_SIZE);
-				ret = -EINVAL;
-				goto hist_collect_exit;
-			}
 			hist_concat = kmalloc(HIST_V_SIZE * pipe_cnt *
 						sizeof(u32), GFP_KERNEL);
 			if (!hist_concat) {
@@ -3198,6 +3245,11 @@ static void pp_ad_calc_worker(struct work_struct *work)
 	mfd = ad->mfd;
 	ctl = mfd_to_ctl(ad->mfd);
 
+	if ((ad->cfg.mode == MDSS_AD_MODE_AUTO_STR) && (ad->last_bl == 0)) {
+		mutex_unlock(&ad->lock);
+		return;
+	}
+
 	if (PP_AD_STATE_RUN & ad->state) {
 		/* Kick off calculation */
 		ad->calc_itr--;
@@ -3226,7 +3278,8 @@ static void pp_ad_calc_worker(struct work_struct *work)
 				pr_debug("calc bl = %d", bl);
 				ad->last_str |= bl << 16;
 				mutex_lock(&ad->mfd->bl_lock);
-				mdss_fb_set_backlight(ad->mfd, bl);
+				if (ad->mfd->bl_level)
+					mdss_fb_set_backlight(ad->mfd, bl);
 				mutex_unlock(&ad->mfd->bl_lock);
 			}
 			pr_debug("calc_str = %d, calc_itr %d",
@@ -3344,7 +3397,7 @@ static int is_valid_calib_addr(void *addr)
 				ret = 1;
 		else if (ptr >= 0x3220 && ptr <= 0x3228)
 				ret = 1;
-		else if (ptr >= 0x3200 || ptr == 0x100)
+		else if (ptr == 0x3200 || ptr == 0x100)
 				ret = 1;
 	}
 end:

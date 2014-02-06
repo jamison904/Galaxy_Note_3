@@ -62,9 +62,9 @@
 #define SIG_MDNIE_BROWSER_TONE3	42
 #endif
 
-#ifdef CONFIG_MDNIE_LITE_CONTROL
-#define HIJACK_DISABLED	0
-#define HIJACK_ENABLED	1
+#if defined(CONFIG_MDNIE_LITE_CONTROL)
+#define HIJACK_DISABLED 0
+#define HIJACK_ENABLED 1
 #endif
 
 enum Lcd_mDNIe_UI {
@@ -79,7 +79,7 @@ enum Lcd_mDNIe_UI {
 	mDNIe_BROWSER_MODE,
 	mDNIe_eBOOK_MODE,
 	mDNIe_EMAIL_MODE,
-	mDNIe_BLIND_MODE,
+	mDNIE_BLINE_MODE,
 #if defined(CONFIG_TDMB)
 	mDNIe_DMB_MODE = 20,
 	mDNIe_DMB_WARM_MODE,
@@ -90,9 +90,6 @@ enum Lcd_mDNIe_UI {
 	mDNIe_BROWSER_TONE1 = 40,
 	mDNIe_BROWSER_TONE2,
 	mDNIe_BROWSER_TONE3,
-#endif
-#if defined(CONFIG_MDNIE_LITE_CONTROL)
-	mDNIe_CONTROL_MODE
 #endif
 };
 

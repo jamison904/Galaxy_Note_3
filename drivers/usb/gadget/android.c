@@ -34,6 +34,9 @@
 
 #include "gadget_chips.h"
 
+#ifdef CONFIG_SEC_H_PROJECT
+#include <linux/mfd/max77803.h>
+#endif
 /*
  * Kbuild is not very cooperative with respect to linking separately
  * compiled library objects into one module.  So for now we won't use
@@ -227,7 +230,10 @@ struct android_dev {
 	char pm_qos[5];
 	struct pm_qos_request pm_qos_req_dma;
 	struct work_struct work;
-
+#ifdef CONFIG_SEC_H_PROJECT
+	struct delayed_work usb_connection_work;
+	int speaker_check_count;
+#endif
 	/* A list of struct android_configuration */
 	struct list_head configs;
 	int configs_num;
@@ -422,6 +428,43 @@ static void android_work(struct work_struct *data)
 	}
 }
 
+#ifdef CONFIG_SEC_H_PROJECT
+void usb_gadget_connect_delay(struct work_struct *work)
+{
+	struct android_dev *dev = container_of(work, struct android_dev, usb_connection_work.work);
+	struct usb_composite_dev *cdev = dev->cdev;
+
+	pr_info("%s, speaker_status: %d, speaker_check_count %d\n",
+		__func__, speaker_status, dev->speaker_check_count);
+
+// Delay the usb connection during speaker on
+	if (speaker_status > 0) {
+		dev->speaker_check_count++;
+		if (dev->speaker_check_count < MAX_SPEAKER_CHECK) {  // Total 3s delay
+			schedule_delayed_work(&dev->usb_connection_work, msecs_to_jiffies(50));
+			return;
+		}
+	}
+	usb_gadget_connect(cdev->gadget);
+}
+
+void usb_gadget_connect_work(struct android_dev *dev)
+{
+	if (dev == NULL) return;
+
+	pr_info("%s\n",__func__);
+
+	if (work_busy(&dev->usb_connection_work.work)) {
+		cancel_delayed_work(&dev->usb_connection_work);
+		pr_info("%s  canceling the work\n",__func__);
+	}
+	usb_status_send_event(USB_CONNECTION_READY);
+	dev->speaker_check_count = 0;
+	schedule_delayed_work(&dev->usb_connection_work, msecs_to_jiffies(1));
+}
+#endif
+
+
 static void android_enable(struct android_dev *dev)
 {
 	struct usb_composite_dev *cdev = dev->cdev;
@@ -436,7 +479,11 @@ static void android_enable(struct android_dev *dev)
 			usb_add_config(cdev, &conf->usb_config,
 						android_bind_config);
 
+#ifdef CONFIG_SEC_H_PROJECT
+		usb_gadget_connect_work(dev);
+#else
 		usb_gadget_connect(cdev->gadget);
+#endif
 	}
 }
 
@@ -1839,11 +1886,18 @@ static int mass_storage_function_init(struct android_usb_function *f,
 	config->fsg.luns[0].removable = 1;
 #else
 	if (dev->pdata && dev->pdata->cdrom) {
-		config->fsg.nluns = 2;
-		config->fsg.luns[1].cdrom = 1;
-		config->fsg.luns[1].ro = 1;
-		config->fsg.luns[1].removable = 0;
-		name[1] = "lun0";
+		config->fsg.luns[config->fsg.nluns].cdrom = 1;
+		config->fsg.luns[config->fsg.nluns].ro = 1;
+		config->fsg.luns[config->fsg.nluns].removable = 0;
+		name[config->fsg.nluns] = "lun0";
+		config->fsg.nluns++;
+	}
+	if (dev->pdata && dev->pdata->internal_ums) {
+		config->fsg.luns[config->fsg.nluns].cdrom = 0;
+		config->fsg.luns[config->fsg.nluns].ro = 0;
+		config->fsg.luns[config->fsg.nluns].removable = 1;
+		name[config->fsg.nluns] = "lun1";
+		config->fsg.nluns++;
 	}
 
 	config->fsg.luns[0].removable = 1;
@@ -2763,7 +2817,11 @@ usb30en_store (struct device *pdev, struct device_attribute *attr,const char *bu
 			printk(KERN_DEBUG "usb: [%s:%d] B4 disconectng gadget\n",
 				__func__, __LINE__);
 			msleep(200);
-			usb_gadget_connect(dev->cdev->gadget);
+
+			if (!usb30en)
+				usb_gadget_connect_work(dev);
+			else
+				usb_gadget_connect(dev->cdev->gadget);
 			printk(KERN_DEBUG "usb: [%s:%d] after usb_gadget_connect\n",
 				__func__, __LINE__);
 			return size;
@@ -3227,6 +3285,8 @@ static int __devinit android_probe(struct platform_device *pdev)
 				&pdata->swfi_latency);
 		pdata->cdrom = of_property_read_bool(pdev->dev.of_node,
 				"qcom,android-usb-cdrom");
+		pdata->internal_ums = of_property_read_bool(pdev->dev.of_node,
+				"qcom,android-usb-internal-ums");
 	} else {
 		pdata = pdev->dev.platform_data;
 	}
@@ -3251,6 +3311,9 @@ static int __devinit android_probe(struct platform_device *pdev)
 	android_dev->configs_num = 0;
 	INIT_LIST_HEAD(&android_dev->configs);
 	INIT_WORK(&android_dev->work, android_work);
+#ifdef CONFIG_SEC_H_PROJECT
+	INIT_DELAYED_WORK(&android_dev->usb_connection_work, usb_gadget_connect_delay);
+#endif
 	mutex_init(&android_dev->mutex);
 
 	android_dev->pdata = pdata;

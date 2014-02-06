@@ -21,6 +21,7 @@
 #include <linux/clk.h>
 #include <mach/msm_bus.h>
 #include "msm_bus_core.h"
+#include <linux/rtmutex.h>
 
 #define INDEX_MASK 0x0000FFFF
 #define PNODE_MASK 0xFFFF0000
@@ -42,7 +43,7 @@
 #define IS_SLAVE_VALID(slv) \
 	(((slv >= MSM_BUS_SLAVE_FIRST) && (slv <= MSM_BUS_SLAVE_LAST)) ? 1 : 0)
 
-static DEFINE_MUTEX(msm_bus_lock);
+static DEFINE_RT_MUTEX(msm_bus_lock);
 
 /* This function uses shift operations to divide 64 bit value for higher
  * efficiency. The divisor expected are number of ports or bus-width.
@@ -503,7 +504,7 @@ uint32_t msm_bus_scale_register_client(struct msm_bus_scale_pdata *pdata)
 	deffab = msm_bus_get_fabric_device(MSM_BUS_FAB_DEFAULT);
 	if (!deffab) {
 		MSM_BUS_ERR("Error finding default fabric\n");
-		return -ENXIO;
+		return 0;
 	}
 
 	nfab = msm_bus_get_num_fab();
@@ -525,7 +526,7 @@ uint32_t msm_bus_scale_register_client(struct msm_bus_scale_pdata *pdata)
 		return 0;
 	}
 
-	mutex_lock(&msm_bus_lock);
+	rt_mutex_lock(&msm_bus_lock);
 	client->pdata = pdata;
 	client->curr = -1;
 	for (i = 0; i < pdata->usecase->num_paths; i++) {
@@ -581,14 +582,14 @@ uint32_t msm_bus_scale_register_client(struct msm_bus_scale_pdata *pdata)
 	}
 	msm_bus_dbg_client_data(client->pdata, MSM_BUS_DBG_REGISTER,
 		(uint32_t)client);
-	mutex_unlock(&msm_bus_lock);
+	rt_mutex_unlock(&msm_bus_lock);
 	MSM_BUS_DBG("ret: %u num_paths: %d\n", (uint32_t)client,
 		pdata->usecase->num_paths);
 	return (uint32_t)(client);
 err:
 	kfree(client->src_pnode);
 	kfree(client);
-	mutex_unlock(&msm_bus_lock);
+	rt_mutex_unlock(&msm_bus_lock);
 	return 0;
 }
 EXPORT_SYMBOL(msm_bus_scale_register_client);
@@ -614,7 +615,7 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 		return -ENXIO;
 	}
 
-	mutex_lock(&msm_bus_lock);
+	rt_mutex_lock(&msm_bus_lock);
 	if (client->curr == index)
 		goto err;
 
@@ -636,6 +637,12 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 		cl, index, client->curr, client->pdata->usecase->num_paths);
 
 	for (i = 0; i < pdata->usecase->num_paths; i++) {
+		MSM_BUS_DBG("cl: %u master_id: %d slave_id: %d ib: %llu ab: %llu\n",
+			cl, client->pdata->usecase[index].vectors[i].src,
+			client->pdata->usecase[index].vectors[i].dst,
+			client->pdata->usecase[index].vectors[i].ib,
+			client->pdata->usecase[index].vectors[i].ab);
+
 		src = msm_bus_board_get_iid(client->pdata->usecase[index].
 			vectors[i].src);
 		if (src == -ENXIO) {
@@ -664,15 +671,6 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 			MSM_BUS_DBG("ab: %llu ib: %llu\n", curr_bw, curr_clk);
 		}
 
-		if (index == 0) {
-			/* This check protects the bus driver from clients
-			 * that can leave non-zero requests after
-			 * unregistering.
-			 * */
-			req_clk = 0;
-			req_bw = 0;
-		}
-
 		if (!pdata->active_only) {
 			ret = update_path(src, pnode, req_clk, req_bw,
 				curr_clk, curr_bw, 0, pdata->active_only);
@@ -696,7 +694,7 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 	bus_for_each_dev(&msm_bus_type, NULL, NULL, msm_bus_commit_fn);
 
 err:
-	mutex_unlock(&msm_bus_lock);
+	rt_mutex_unlock(&msm_bus_lock);
 	return ret;
 }
 EXPORT_SYMBOL(msm_bus_scale_client_update_request);
@@ -794,16 +792,52 @@ void msm_bus_scale_client_reset_pnodes(uint32_t cl)
  */
 void msm_bus_scale_unregister_client(uint32_t cl)
 {
+	int i;
 	struct msm_bus_client *client = (struct msm_bus_client *)(cl);
+	bool warn = false;
 	if (IS_ERR_OR_NULL(client))
 		return;
-	if (client->curr != 0)
+
+	for (i = 0; i < client->pdata->usecase->num_paths; i++) {
+		if ((client->pdata->usecase[0].vectors[i].ab) ||
+			(client->pdata->usecase[0].vectors[i].ib)) {
+			warn = true;
+			break;
+		}
+	}
+
+	if (warn) {
+		int num_paths = client->pdata->usecase->num_paths;
+		int ab[num_paths], ib[num_paths];
+		WARN(1, "%s called unregister with non-zero vectors\n",
+			client->pdata->name);
+
+		/*
+		 * Save client values and zero them out to
+		 * cleanly unregister
+		 */
+		for (i = 0; i < num_paths; i++) {
+			ab[i] = client->pdata->usecase[0].vectors[i].ab;
+			ib[i] = client->pdata->usecase[0].vectors[i].ib;
+			client->pdata->usecase[0].vectors[i].ab = 0;
+			client->pdata->usecase[0].vectors[i].ib = 0;
+		}
+
 		msm_bus_scale_client_update_request(cl, 0);
+
+		/* Restore client vectors if required for re-registering. */
+		for (i = 0; i < num_paths; i++) {
+			client->pdata->usecase[0].vectors[i].ab = ab[i];
+			client->pdata->usecase[0].vectors[i].ib = ib[i];
+		}
+	} else if (client->curr != 0)
+		msm_bus_scale_client_update_request(cl, 0);
+
 	MSM_BUS_DBG("Unregistering client %d\n", cl);
-	mutex_lock(&msm_bus_lock);
+	rt_mutex_lock(&msm_bus_lock);
 	msm_bus_scale_client_reset_pnodes(cl);
 	msm_bus_dbg_client_data(client->pdata, MSM_BUS_DBG_UNREGISTER, cl);
-	mutex_unlock(&msm_bus_lock);
+	rt_mutex_unlock(&msm_bus_lock);
 	kfree(client->src_pnode);
 	kfree(client);
 }

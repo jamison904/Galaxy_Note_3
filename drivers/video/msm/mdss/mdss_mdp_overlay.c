@@ -40,6 +40,7 @@
 	(((size) > (max_size)) || ((offset) > ((max_size) - (size))))
 
 bool first_update = false;
+extern bool cpufreq_screen_on;
 
 #ifdef CONFIG_FB_MSM_CAMERA_CSC
 u8 pre_csc_update = 0xFF;
@@ -1374,15 +1375,26 @@ pan_display_error:
 static void mdss_mdp_overlay_handle_vsync(struct mdss_mdp_ctl *ctl,
 						ktime_t t)
 {
-	struct msm_fb_data_type *mfd = ctl->mfd;
-	struct mdss_overlay_private *mdp5_data;
+	struct msm_fb_data_type *mfd = NULL;
+	struct mdss_overlay_private *mdp5_data = NULL;
 
+	if (!ctl) {
+		pr_err("ctl is NULL\n");
+		return;
+	}
+
+	mfd = ctl->mfd;
 	if (!mfd || !mfd->mdp.private1) {
 		pr_warn("Invalid handle for vsync\n");
 		return;
 	}
 
 	mdp5_data = mfd_to_mdp5_data(mfd);
+	if (!mdp5_data) {
+		pr_err("mdp5_data is NULL\n");
+		return;
+	}
+
 	pr_debug("vsync on fb%d play_cnt=%d\n", mfd->index, ctl->play_cnt);
 
 	spin_lock(&mdp5_data->vsync_lock);
@@ -2078,6 +2090,7 @@ static int mdss_mdp_overlay_on(struct msm_fb_data_type *mfd)
 	if (!mfd)
 		return -ENODEV;
 
+	cpufreq_screen_on = true;
 	mdp5_data = mfd_to_mdp5_data(mfd);
 
 	if (mfd->key != MFD_KEY)

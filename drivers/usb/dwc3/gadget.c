@@ -74,7 +74,7 @@ schedule_work(&udc->reconnect_work);
 	|| defined(CONFIG_MACH_LT03KTT)	|| defined(CONFIG_MACH_LT03LGT)
 extern int system_rev;
 #endif 
-static bool tx_fifo_resize_enable;
+static bool tx_fifo_resize_enable = true;
 module_param(tx_fifo_resize_enable, bool, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(tx_fifo_resize_enable,
 			"Enable allocating Tx fifo for endpoints");
@@ -203,6 +203,12 @@ int dwc3_gadget_resize_tx_fifos(struct dwc3 *dwc)
 
 	if (!dwc->needs_fifo_resize && !tx_fifo_resize_enable)
 		return 0;
+
+	if (dwc->gadget.speed != USB_SPEED_SUPER) {
+		pr_info("usb:: %s off\n", __func__);
+		return 0;
+	}
+	pr_info("usb:: %s on\n", __func__);
 
 	ram1_depth = DWC3_RAM1_DEPTH(dwc->hwparams.hwparams7);
 	mdwidth = DWC3_MDWIDTH(dwc->hwparams.hwparams0);
@@ -1915,6 +1921,7 @@ err1:
 	__dwc3_gadget_ep_disable(dwc->eps[0]);
 
 err0:
+	dwc->gadget_driver = NULL;
 	spin_unlock_irqrestore(&dwc->lock, flags);
 	pm_runtime_put(dwc->dev);
 
@@ -1979,6 +1986,7 @@ static int __devinit dwc3_gadget_init_endpoints(struct dwc3 *dwc)
 
 		if (epnum == 0 || epnum == 1) {
 			dep->endpoint.maxpacket = 512;
+			dep->endpoint.maxburst = 1;
 			dep->endpoint.ops = &dwc3_gadget_ep0_ops;
 			if (!epnum)
 				dwc->gadget.ep0 = &dep->endpoint;

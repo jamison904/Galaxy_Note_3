@@ -2260,35 +2260,6 @@ config MSM_CPU_FREQ_MIN
 
 endif # CPU_FREQ_MSM
 
-config INTELLI_PLUG
-	bool "Enable intelli-plug cpu hotplug driver"
-	default n
-	help
-	  Generic Intelli-plug cpu hotplug driver for ARM SOCs
-
-config MSM_CPUFREQ_LIMITER
-	tristate "MSM CPU frequency limiter"
-	default n
-	help
-	  This driver limits MSM CPU frequency through sysfs file system.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called cpufreq_stats.
-
-	  If in doubt, say N.
-
-config CPU_VOLTAGE_TABLE
-	bool "Enable CPU Voltage Table via sysfs for adjustements"
-	default n
-	help
-	  Krait User Voltage Control
-
-config CPU_OVERCLOCK
-	bool "Enable CPU Overclocking option"
-	default n
-	help
-	  Krait overclocking up to 2.5 GHz
-
 config MSM_AVS_HW
 	bool "Enable Adaptive Voltage Scaling (AVS)"
 	default n
@@ -3572,13 +3543,5 @@ config PCM_ROUTE_VOICE_STUB
 	default n
 	bool "External AUXPCM device route to SLIMBUS or WCN(BT) using the VOICE_STUB Front End"
 	depends on ARCH_MSM8974
-
-config FORCE_FAST_CHARGE
-	bool "Force fast charging (AC/USB) by Yank555.lu"
-	default n
-	help
-	  A simple sysfs interface to force adapters that
-	  are detected as USB to charge as AC (1A/h) or to set
-	  custom charging currents for AC and USB.
 	
 endif

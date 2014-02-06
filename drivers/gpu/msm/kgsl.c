@@ -110,29 +110,6 @@ void hang_timer(unsigned long data)
 }
 
 /**
- * kgsl_hang_intr_work() - GPU hang interrupt work
- * @dev: device ptr
- *
- * This function is called when GPU hang interrupt happens. In
- * this fuction we check the device state and trigger fault
- * tolerance.
- */
-void kgsl_hang_intr_work(struct work_struct *work)
-{
-	struct kgsl_device *device = container_of(work, struct kgsl_device,
-							hang_intr_ws);
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-
-	/* If hang_intr_set is set, turn it off and trigger FT */
-	mutex_lock(&device->mutex);
-	if ((device->state == KGSL_STATE_ACTIVE) &&
-		(atomic_cmpxchg(&adreno_dev->hang_intr_set, 1, 0)))
-			adreno_dump_and_exec_ft(device);
-	mutex_unlock(&device->mutex);
-
-}
-
-/**
  * kgsl_trace_issueibcmds() - Call trace_issueibcmds by proxy
  * device: KGSL device
  * id: ID of the context submitting the command
@@ -662,7 +639,6 @@ EXPORT_SYMBOL(kgsl_check_timestamp);
 static int kgsl_suspend_device(struct kgsl_device *device, pm_message_t state)
 {
 	int status = -EINVAL;
-	struct kgsl_pwrscale_policy *policy_saved;
 
 	if (!device)
 		return -EINVAL;
@@ -670,8 +646,6 @@ static int kgsl_suspend_device(struct kgsl_device *device, pm_message_t state)
 	KGSL_PWR_WARN(device, "suspend start\n");
 
 	mutex_lock(&device->mutex);
-	policy_saved = device->pwrscale.policy;
-	device->pwrscale.policy = NULL;
 	kgsl_pwrctrl_request_state(device, KGSL_STATE_SUSPEND);
 	/*
 	 * Make sure no user process is waiting for a timestamp
@@ -716,7 +690,7 @@ static int kgsl_suspend_device(struct kgsl_device *device, pm_message_t state)
 			goto end;
 	}
 	kgsl_pwrctrl_request_state(device, KGSL_STATE_NONE);
-	device->pwrscale.policy = policy_saved;
+	kgsl_pwrscale_sleep(device);
 	status = 0;
 
 end:
@@ -932,6 +906,9 @@ kgsl_get_process_private(struct kgsl_device_private *cur_dev_priv)
 	struct kgsl_process_private *private;
 
 	private = kgsl_find_process_private(cur_dev_priv);
+
+	if (!private)
+		return NULL;
 
 	mutex_lock(&private->process_private_mutex);
 
@@ -2406,7 +2383,8 @@ kgsl_ioctl_gpumem_sync_cache_bulk(struct kgsl_device_private *dev_priv,
 		entries[actual_count++] = entry;
 
 		/* If we exceed the breakeven point, flush the entire cache */
-		if (op_size >= kgsl_driver.full_cache_threshold &&
+		if (kgsl_driver.full_cache_threshold != 0 &&
+		    op_size >= kgsl_driver.full_cache_threshold &&
 		    param->op == KGSL_GPUMEM_CACHE_FLUSH) {
 			full_flush = true;
 			break;
@@ -2465,6 +2443,7 @@ _gpumem_alloc(struct kgsl_device_private *dev_priv,
 	int result;
 	struct kgsl_process_private *private = dev_priv->process_priv;
 	struct kgsl_mem_entry *entry;
+	int align;
 
 	/*
 	 * Mask off unknown flags from userspace. This way the caller can
@@ -2475,6 +2454,16 @@ _gpumem_alloc(struct kgsl_device_private *dev_priv,
 		| KGSL_MEMTYPE_MASK
 		| KGSL_MEMALIGN_MASK
 		| KGSL_MEMFLAGS_USE_CPU_MAP;
+
+	/* Cap the alignment bits to the highest number we can handle */
+
+	align = (flags & KGSL_MEMALIGN_MASK) >> KGSL_MEMALIGN_SHIFT;
+	if (align >= 32) {
+		KGSL_CORE_ERR("Alignment too big, restricting to 2^31\n");
+
+		flags &= ~KGSL_MEMALIGN_MASK;
+		flags |= (31 << KGSL_MEMALIGN_SHIFT) & KGSL_MEMALIGN_MASK;
+	}
 
 	entry = kgsl_mem_entry_create();
 	if (entry == NULL)
@@ -2771,7 +2760,7 @@ static const struct {
 } kgsl_ioctl_funcs[] = {
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_DEVICE_GETPROPERTY,
 			kgsl_ioctl_device_getproperty,
-			KGSL_IOCTL_LOCK),
+			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_DEVICE_WAITTIMESTAMP,
 			kgsl_ioctl_device_waittimestamp,
 			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
@@ -2789,13 +2778,13 @@ static const struct {
 			KGSL_IOCTL_LOCK),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_CMDSTREAM_FREEMEMONTIMESTAMP,
 			kgsl_ioctl_cmdstream_freememontimestamp,
-			KGSL_IOCTL_LOCK),
+			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_CMDSTREAM_FREEMEMONTIMESTAMP_CTXTID,
 			kgsl_ioctl_cmdstream_freememontimestamp_ctxtid,
-			KGSL_IOCTL_LOCK),
+			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_DRAWCTXT_CREATE,
 			kgsl_ioctl_drawctxt_create,
-			KGSL_IOCTL_LOCK),
+			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_DRAWCTXT_DESTROY,
 			kgsl_ioctl_drawctxt_destroy,
 			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
@@ -2815,10 +2804,10 @@ static const struct {
 			kgsl_ioctl_cff_user_event, 0),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_TIMESTAMP_EVENT,
 			kgsl_ioctl_timestamp_event,
-			KGSL_IOCTL_LOCK),
+			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_SETPROPERTY,
 			kgsl_ioctl_device_setproperty,
-			KGSL_IOCTL_LOCK),
+			KGSL_IOCTL_LOCK | KGSL_IOCTL_WAKE),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_GPUMEM_ALLOC_ID,
 			kgsl_ioctl_gpumem_alloc_id, 0),
 	KGSL_IOCTL_FUNC(IOCTL_KGSL_GPUMEM_FREE_ID,
@@ -2836,7 +2825,7 @@ static long kgsl_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 	struct kgsl_device_private *dev_priv = filep->private_data;
 	unsigned int nr;
 	kgsl_ioctl_func_t func;
-	int lock, ret, use_hw;
+	int lock, ret, use_hw = 0;
 	char ustack[64];
 	void *uptr = NULL;
 
@@ -2904,7 +2893,6 @@ static long kgsl_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 			goto done;
 		}
 		lock = 1;
-		use_hw = 1;
 	}
 
 	if (lock) {
@@ -3051,7 +3039,7 @@ err_put:
 static inline bool
 mmap_range_valid(unsigned long addr, unsigned long len)
 {
-	return (addr + len) > addr && (addr + len) < TASK_SIZE;
+	return ((ULONG_MAX - addr) > len) && ((addr + len) < TASK_SIZE);
 }
 
 static unsigned long

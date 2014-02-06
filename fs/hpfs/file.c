@@ -116,9 +116,12 @@ static int hpfs_write_begin(struct file *file, struct address_space *mapping,
 				hpfs_get_block,
 				&hpfs_i(mapping->host)->mmu_private);
 	if (unlikely(ret)) {
-		loff_t isize = mapping->host->i_size;
+		loff_t isize;
+		hpfs_lock(mapping->host->i_sb);
+		isize = mapping->host->i_size;
 		if (pos + len > isize)
 			vmtruncate(mapping->host, isize);
+		hpfs_unlock(mapping->host->i_sb);
 	}
 
 	return ret;
@@ -155,9 +158,9 @@ const struct file_operations hpfs_file_ops =
 {
 	.llseek		= generic_file_llseek,
 	.read		= do_sync_read,
-	.read_iter	= generic_file_read_iter,
+	.aio_read	= generic_file_aio_read,
 	.write		= hpfs_file_write,
-	.write_iter	= generic_file_write_iter,
+	.aio_write	= generic_file_aio_write,
 	.mmap		= generic_file_mmap,
 	.release	= hpfs_file_release,
 	.fsync		= hpfs_file_fsync,

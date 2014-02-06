@@ -525,8 +525,7 @@ static int __devinit z180_probe(struct platform_device *pdev)
 	if (status)
 		goto error_close_ringbuffer;
 
-	kgsl_pwrscale_init(device);
-	kgsl_pwrscale_attach_policy(device, Z180_DEFAULT_PWRSCALE_POLICY);
+	kgsl_pwrscale_init(&pdev->dev, CONFIG_MSM_Z180_DEFAULT_GOVERNOR);
 
 	return status;
 
@@ -580,7 +579,6 @@ static int z180_start(struct kgsl_device *device)
 
 	z180_cmdstream_start(device);
 
-	mod_timer(&device->idle_timer, jiffies + FIRST_TIMEOUT);
 	kgsl_pwrctrl_irq(device, KGSL_PWRFLAGS_ON);
 	device->ftbl->irqctrl(device, 1);
 
@@ -904,26 +902,24 @@ z180_drawctxt_destroy(struct kgsl_context *context)
 static void z180_power_stats(struct kgsl_device *device,
 			    struct kgsl_power_stats *stats)
 {
-	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct kgsl_pwrscale *pwrscale = &device->pwrscale;
 	s64 tmp = ktime_to_us(ktime_get());
 
-	if (pwr->time == 0) {
-		pwr->time = tmp;
-		stats->total_time = 0;
+	memset(stats, 0, sizeof(stats));
+	if (pwrscale->on_time == 0) {
+		pwrscale->on_time = tmp;
 		stats->busy_time = 0;
 	} else {
-		stats->total_time = tmp - pwr->time;
-		pwr->time = tmp;
-		stats->busy_time = tmp - device->on_time;
-		device->on_time = tmp;
+		stats->busy_time = tmp - pwrscale->on_time;
+		pwrscale->on_time = tmp;
 	}
 }
 
-static void z180_irqctrl(struct kgsl_device *device, unsigned int mask)
+static void z180_irqctrl(struct kgsl_device *device, int state)
 {
 	/* Control interrupts for Z180 and the Z180 MMU */
 
-	if (mask) {
+	if (state) {
 		z180_regwrite(device, (ADDR_VGC_IRQENABLE >> 2), 3);
 		z180_regwrite(device, MH_INTERRUPT_MASK,
 			kgsl_mmu_get_int_mask());

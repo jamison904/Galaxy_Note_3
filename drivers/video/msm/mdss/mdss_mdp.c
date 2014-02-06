@@ -165,9 +165,10 @@ static inline int mdss_irq_dispatch(u32 hw_ndx, int irq, void *ptr)
 
 	spin_lock(&mdss_lock);
 	hw = mdss_irq_handlers[hw_ndx];
+	spin_unlock(&mdss_lock);
+
 	if (hw)
 		rc = hw->irq_handler(irq, hw->ptr);
-	spin_unlock(&mdss_lock);
 
 	return rc;
 }
@@ -755,7 +756,7 @@ static int mdss_mdp_irq_clk_setup(struct mdss_data_type *mdata)
 
 	pr_debug("max mdp clk rate=%d\n", mdata->max_mdp_clk_rate);
 
-	ret = devm_request_irq(&mdata->pdev->dev, mdata->irq, mdss_irq_handler,
+	ret = request_irq(mdata->irq, mdss_irq_handler,
 			 IRQF_DISABLED,	"MDSS", mdata);
 	if (ret) {
 		pr_err("mdp request_irq() failed!\n");
@@ -936,6 +937,10 @@ int mdss_hw_init(struct mdss_data_type *mdata)
 	mdss_mdp_clk_ctrl(MDP_BLOCK_POWER_ON, false);
 	mdata->mdp_rev = MDSS_MDP_REG_READ(MDSS_MDP_REG_HW_VERSION);
 	pr_info_once("MDP Rev=%x\n", mdata->mdp_rev);
+
+	/* disable hw underrun recovery */
+	writel_relaxed(0x0, mdata->mdp_base +
+			MDSS_MDP_REG_VIDEO_INTF_UNDERFLOW_CTL);
 
 	if (mdata->hw_settings) {
 		struct mdss_hw_settings *hws = mdata->hw_settings;
@@ -1134,8 +1139,8 @@ static int mdss_mdp_probe(struct platform_device *pdev)
 probe_done:
 	if (IS_ERR_VALUE(rc)) {
 		mdss_mdp_hw.ptr = NULL;
-		mdss_res = NULL;
 		mdss_mdp_pp_term(&pdev->dev);
+		mdss_res = NULL;
 	}
 
 	return rc;
