@@ -105,7 +105,9 @@ static int mp_decision(void)
 	total_time += this_time;
 
 	rq_depth = rq_info.rq_avg;
-	//pr_info(" rq_deptch = %u", rq_depth);
+#ifdef DEBUG_INTELLI_PLUG
+	pr_info(" rq_depth = %u", rq_depth);
+#endif
 	nr_cpu_online = num_online_cpus();
 
 	if (nr_cpu_online) {
@@ -139,7 +141,7 @@ static unsigned int calculate_thread_stats(void)
 	if (!eco_mode_active) {
 		threshold_size =  ARRAY_SIZE(nr_run_thresholds_full);
 		nr_run_hysteresis = 8;
-		nr_fshift = 3;
+		nr_fshift = 2;
 #ifdef DEBUG_INTELLI_PLUG
 		pr_info("intelliplug: full mode active!");
 #endif
@@ -152,6 +154,10 @@ static unsigned int calculate_thread_stats(void)
 		pr_info("intelliplug: eco mode active!");
 #endif
 	}
+
+#ifdef DEBUG_INTELLI_PLUG
+	pr_info("avg_nr_run = %d\n", avg_nr_run);
+#endif
 
 	for (nr_run = 1; nr_run < threshold_size; nr_run++) {
 		unsigned int nr_threshold;
@@ -344,7 +350,6 @@ static void intelli_plug_input_event(struct input_handle *handle,
 #ifdef DEBUG_INTELLI_PLUG
 	pr_info("intelli_plug touched!\n");
 #endif
-
 	cancel_delayed_work(&intelli_plug_work);
 
 	sampling_time = BUSY_SAMPLING_MS;

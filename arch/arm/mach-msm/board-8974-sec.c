@@ -384,35 +384,35 @@ static struct reserve_info msm8974_reserve_info __initdata = {
 #ifdef CONFIG_ANDROID_PERSISTENT_RAM
 static struct persistent_ram_descriptor pram_descs[] = {
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
-        {
-                .name = "ram_console",
-                .size = RAM_CONSOLE_SIZE,
-        },
+	{
+	.name = "ram_console",
+	.size = RAM_CONSOLE_SIZE,
+	},
 #endif
 };
 
 static struct persistent_ram msm8974_persistent_ram = {
-        .start = PERSISTENT_RAM_BASE,
-        .size = PERSISTENT_RAM_SIZE,
-        .num_descs = ARRAY_SIZE(pram_descs),
-        .descs = pram_descs,
+	.start = PERSISTENT_RAM_BASE,
+	.size = PERSISTENT_RAM_SIZE,
+	.num_descs = ARRAY_SIZE(pram_descs),
+	.descs = pram_descs,
 };
 
 void __init add_persistent_ram(void)
 {
-    persistent_ram_early_init(&msm8974_persistent_ram);
+	persistent_ram_early_init(&msm8974_persistent_ram);
 }
 #endif
 
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 static struct platform_device ram_console_device = {
-        .name = "ram_console",
-        .id = -1,
+	.name = "ram_console",
+	.id = -1,
 };
 
 void __init add_ramconsole_devices(void)
 {
-    platform_device_register(&ram_console_device);
+	platform_device_register(&ram_console_device);
 }
 #endif /* CONFIG_ANDROID_RAM_CONSOLE */
 
@@ -423,7 +423,7 @@ void __init msm_8974_reserve(void)
 	msm_reserve();
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 	add_persistent_ram();
-#endif
+#endif 
 }
 
 static void __init msm8974_early_memory(void)
@@ -593,7 +593,7 @@ void __init msm8974_init(void)
 	msm_8974_init_gpiomux();
 	regulator_has_full_constraints();
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
-        add_ramconsole_devices();
+	add_ramconsole_devices();
 #endif
 	board_dt_populate(adata);
 

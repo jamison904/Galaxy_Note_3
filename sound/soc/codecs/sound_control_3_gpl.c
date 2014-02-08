@@ -28,15 +28,15 @@
 
 extern struct snd_soc_codec *fauxsound_codec_ptr;
 
-static int snd_ctrl_locked = 0;
+int snd_ctrl_locked = 1;
 
 unsigned int taiko_read(struct snd_soc_codec *codec, unsigned int reg);
 int taiko_write(struct snd_soc_codec *codec, unsigned int reg,
 		unsigned int value);
 
 
-static unsigned int cached_regs[] = {6, 6, 0, 0, 0, 0, 0, 0, 0, 0,
-			    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+static unsigned int cached_regs[] = {6, 6, 0, 0, -2, -2, 0, 0, 0, 0,
+			    -2, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 			    0 };
 
 static unsigned int *cache_select(unsigned int reg)
@@ -128,10 +128,6 @@ int snd_hax_reg_access(unsigned int reg)
 	int ret = 1;
 
 	switch (reg) {
-		case TAIKO_A_RX_HPH_L_GAIN:
-		case TAIKO_A_RX_HPH_R_GAIN:
-		case TAIKO_A_RX_HPH_L_STATUS:
-		case TAIKO_A_RX_HPH_R_STATUS:
 		case TAIKO_A_CDC_RX1_VOL_CTL_B2_CTL:
 		case TAIKO_A_CDC_RX2_VOL_CTL_B2_CTL:
 		case TAIKO_A_CDC_RX3_VOL_CTL_B2_CTL:

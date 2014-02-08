@@ -31,10 +31,6 @@
 
 #include "acpuclock.h"
 
-#ifdef CONFIG_CPUFREQ_HARDLIMIT
-#include <linux/cpufreq_hardlimit.h>
-#endif
-
 struct cpufreq_work_struct {
 	struct work_struct work;
 	struct cpufreq_policy *policy;
@@ -101,11 +97,7 @@ void set_max_lock(int freq)
 
 int get_max_freq(void)
 {
-#ifdef CONFIG_CPUFREQ_HARDLIMIT
-	return check_cpufreq_hardlimit(cpuinfo_max_freq); /* Yank555.lu : Enforce hardlimit */
-#else
 	return cpuinfo_max_freq;
-#endif
 }
 
 int get_min_freq(void)
@@ -204,15 +196,6 @@ static int msm_cpufreq_target(struct cpufreq_policy *policy,
 	struct cpufreq_frequency_table *table;
 
 	struct cpufreq_work_struct *cpu_work = NULL;
-	cpumask_var_t mask;
-
-	if (!cpu_active(policy->cpu)) {
-		pr_info("cpufreq: cpu %d is not active.\n", policy->cpu);
-		return -ENODEV;
-	}
-
-	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
-		return -ENOMEM;
 
 	mutex_lock(&per_cpu(cpufreq_suspend, policy->cpu).suspend_mutex);
 
@@ -240,22 +223,14 @@ static int msm_cpufreq_target(struct cpufreq_policy *policy,
 	cpu_work->frequency = table[index].frequency;
 	cpu_work->status = -ENODEV;
 
-	cpumask_clear(mask);
-	cpumask_set_cpu(policy->cpu, mask);
-	if (cpumask_equal(mask, &current->cpus_allowed)) {
-		ret = set_cpu_freq(cpu_work->policy, cpu_work->frequency);
-		goto done;
-	} else {
-		cancel_work_sync(&cpu_work->work);
-		INIT_COMPLETION(cpu_work->complete);
-		queue_work_on(policy->cpu, msm_cpufreq_wq, &cpu_work->work);
-		wait_for_completion(&cpu_work->complete);
-	}
+	cancel_work_sync(&cpu_work->work);
+	INIT_COMPLETION(cpu_work->complete);
+	queue_work_on(policy->cpu, msm_cpufreq_wq, &cpu_work->work);
+	wait_for_completion(&cpu_work->complete);
 
 	ret = cpu_work->status;
 
 done:
-	free_cpumask_var(mask);
 	mutex_unlock(&per_cpu(cpufreq_suspend, policy->cpu).suspend_mutex);
 	return ret;
 }
@@ -333,10 +308,6 @@ int msm_cpufreq_set_freq_limits(uint32_t cpu, uint32_t min, uint32_t max)
 }
 EXPORT_SYMBOL(msm_cpufreq_set_freq_limits);
 
-#ifdef CONFIG_LOW_CPUCLOCKS
-#define LOW_CPUCLOCKS_FREQ_MIN	162000
-#endif
-
 static int __cpuinit msm_cpufreq_init(struct cpufreq_policy *policy)
 {
 	int cur_freq;
@@ -359,20 +330,12 @@ static int __cpuinit msm_cpufreq_init(struct cpufreq_policy *policy)
 
 	if (cpufreq_frequency_table_cpuinfo(policy, table)) {
 #ifdef CONFIG_MSM_CPU_FREQ_SET_MIN_MAX
-#ifdef CONFIG_LOW_CPUCLOCKS
-		policy->cpuinfo.min_freq = LOW_CPUCLOCKS_FREQ_MIN;
-#else
 		policy->cpuinfo.min_freq = CONFIG_MSM_CPU_FREQ_MIN;
-#endif
 		policy->cpuinfo.max_freq = CONFIG_MSM_CPU_FREQ_MAX;
 #endif
 	}
 #ifdef CONFIG_MSM_CPU_FREQ_SET_MIN_MAX
-#ifdef CONFIG_LOW_CPUCLOCKS
-	policy->min = LOW_CPUCLOCKS_FREQ_MIN;
-#else
 	policy->min = CONFIG_MSM_CPU_FREQ_MIN;
-#endif
 	policy->max = CONFIG_MSM_CPU_FREQ_MAX;
 #endif
 
@@ -496,7 +459,8 @@ static int __init msm_cpufreq_register(void)
 		per_cpu(cpufreq_suspend, cpu).device_suspended = 0;
 	}
 
-	msm_cpufreq_wq = alloc_workqueue("msm-cpufreq", WQ_HIGHPRI, 0);
+	msm_cpufreq_wq = alloc_workqueue("msm-cpufreq",
+			WQ_MEM_RECLAIM | WQ_HIGHPRI, 1);
 	register_hotcpu_notifier(&msm_cpufreq_cpu_notifier);
 
 	return cpufreq_register_driver(&msm_cpufreq_driver);

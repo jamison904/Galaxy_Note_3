@@ -960,8 +960,8 @@ static void __init bus_init(const struct l2_level *l2_level)
 
 #ifdef CONFIG_CPU_VOLTAGE_TABLE
 
-#define HFPLL_MIN_VDD		 600000
-#define HFPLL_MAX_VDD		1450000
+#define HFPLL_MIN_VDD		 500000
+#define HFPLL_MAX_VDD		1300000
 
 ssize_t acpuclk_get_vdd_levels_str(char *buf) {
 
@@ -1200,11 +1200,6 @@ static struct pvs_table * __init select_freq_plan(
 		dev_warn(drv.dev, "ACPU PVS: Defaulting to %d\n",
 			 drv.pvs_bin);
 	}
-
-#ifdef CONFIG_SEC_DEBUG_SUBSYS
-	speed_bin = drv.speed_bin;
-	pvs_bin = drv.pvs_bin;
-#endif
 
 	return &params->pvs_tables[drv.speed_bin][drv.pvs_bin];
 }

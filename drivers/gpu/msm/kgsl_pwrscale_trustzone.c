@@ -159,10 +159,10 @@ static void tz_wake(struct kgsl_device *device, struct kgsl_pwrscale *pwrscale)
 #ifdef CONFIG_MSM_KGSL_SIMPLE_GOV
 /* KGSL Simple GPU Governor */
 /* Copyright (c) 2011-2013, Paul Reioux (Faux123). All rights reserved. */
-static int default_laziness = 5;
+static int default_laziness = 7;
 module_param_named(simple_laziness, default_laziness, int, 0664);
 
-static int ramp_up_threshold = 6000;
+static int ramp_up_threshold = 3000;
 module_param_named(simple_ramp_threshold, ramp_up_threshold, int, 0664);
 
 static int laziness;
@@ -221,11 +221,13 @@ static void tz_idle(struct kgsl_device *device, struct kgsl_pwrscale *pwrscale)
 		(priv->bin.total_time < FLOOR))
 		return;
 
-	/* If there is an extended block of busy processing,
-	 * increase frequency.  Otherwise run the normal algorithm.
+	/* If there is an extended block of busy processing, set
+	 * frequency to turbo.  Otherwise run the normal algorithm.
 	 */
 	if (priv->bin.busy_time > CEILING) {
-		val = -1;
+		val = 0;
+		kgsl_pwrctrl_pwrlevel_change(device,
+				KGSL_PWRLEVEL_TURBO);
 	} else if (priv->idle_dcvs) {
 		idle = priv->bin.total_time - priv->bin.busy_time;
 		idle = (idle > 0) ? idle : 0;
@@ -310,8 +312,10 @@ static int tz_init(struct kgsl_device *device, struct kgsl_pwrscale *pwrscale)
 	tz_pwrlevels[0] = j;
 	ret = scm_call(SCM_SVC_DCVS, TZ_INIT_ID, tz_pwrlevels,
 				sizeof(tz_pwrlevels), NULL, 0);
-	if (ret)
+	if (ret) {
+		KGSL_DRV_ERR(device, "Fall back to idle based GPU DCVS algo");
 		priv->idle_dcvs = 1;
+	}
 	return 0;
 }
 #else
