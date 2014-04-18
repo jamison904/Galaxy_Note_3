@@ -1520,6 +1520,14 @@ struct xhci_hcd {
  */
 #define XHCI_PORTSC_DELAY	(1 << 10)
 #define XHCI_TRUST_TX_LENGTH	(1 << 10)
+/*
+ * In Synopsis DWC3 controller, XHCI RESET takes some time complete. If PIPE
+ * RESET is not complete by the time USBCMD.RUN bit is set then HC fails to
+ * carry out SS transfers.
+ *
+ * The workaround is to give worst case pipe delay ~350us after resetting HC
+ */
+#define XHCI_RESET_DELAY	(1 << 11)
 #define XHCI_SPURIOUS_REBOOT	(1 << 13)
 #define XHCI_COMP_MODE_QUIRK	(1 << 14)
 #define XHCI_AVOID_BEI		(1 << 15)
@@ -1859,5 +1867,9 @@ void xhci_ring_device(struct xhci_hcd *xhci, int slot_id);
 struct xhci_input_control_ctx *xhci_get_input_control_ctx(struct xhci_hcd *xhci, struct xhci_container_ctx *ctx);
 struct xhci_slot_ctx *xhci_get_slot_ctx(struct xhci_hcd *xhci, struct xhci_container_ctx *ctx);
 struct xhci_ep_ctx *xhci_get_ep_ctx(struct xhci_hcd *xhci, struct xhci_container_ctx *ctx, unsigned int ep_index);
+
+/* EHSET */
+int xhci_submit_single_step_set_feature(struct usb_hcd *hcd, struct urb *urb,
+					int is_setup);
 
 #endif /* __LINUX_XHCI_HCD_H */

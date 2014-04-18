@@ -58,6 +58,7 @@
 #include <linux/swapops.h>
 #include <linux/elf.h>
 #include <linux/gfp.h>
+#include <linux/bug.h>
 
 #include <asm/io.h>
 #include <asm/pgalloc.h>
@@ -113,37 +114,6 @@ __setup("norandmaps", disable_randmaps);
 unsigned long zero_pfn __read_mostly;
 unsigned long highest_memmap_pfn __read_mostly;
 
-#ifdef CONFIG_UKSM
-unsigned long uksm_zero_pfn __read_mostly;
-struct page *empty_uksm_zero_page;
-
-static int __init setup_uksm_zero_page(void)
-{
-  unsigned long addr;
-  addr = __get_free_pages(GFP_KERNEL | __GFP_ZERO, 0);
-  if (!addr)
-    panic("Oh boy, that early out of memory?");
-
-  empty_uksm_zero_page = virt_to_page((void *) addr);
-  SetPageReserved(empty_uksm_zero_page);
-
-  uksm_zero_pfn = page_to_pfn(empty_uksm_zero_page);
-
-  return 0;
-}
-core_initcall(setup_uksm_zero_page);
-
-static inline int is_uksm_zero_pfn(unsigned long pfn)
-{
-  return pfn == uksm_zero_pfn;
-}
-#else
-static inline int is_uksm_zero_pfn(unsigned long pfn)
-{
-  return 0;
-}
-#endif
-
 /*
  * CONFIG_MMU architectures set up ZERO_PAGE in their paging_init()
  */
@@ -184,9 +154,11 @@ static void add_mm_counter_fast(struct mm_struct *mm, int member, int val)
 
 /* sync counter once per 64 page faults */
 #define TASK_RSS_EVENTS_THRESH	(64)
+
 #if defined(CONFIG_VMWARE_MVP)
 EXPORT_SYMBOL_GPL(get_mm_counter);
 #endif
+
 static void check_sync_rss_stat(struct task_struct *task)
 {
 	if (unlikely(task != current))
@@ -744,6 +716,9 @@ static void print_bad_pte(struct vm_area_struct *vma, unsigned long addr,
 	if (vma->vm_file && vma->vm_file->f_op)
 		print_symbol(KERN_ALERT "vma->vm_file->f_op->mmap: %s\n",
 				(unsigned long)vma->vm_file->f_op->mmap);
+
+	BUG_ON(PANIC_CORRUPTION);
+
 	dump_stack();
 	add_taint(TAINT_BAD_PAGE);
 }
@@ -756,7 +731,7 @@ static inline int is_cow_mapping(vm_flags_t flags)
 #ifndef is_zero_pfn
 static inline int is_zero_pfn(unsigned long pfn)
 {
-	return (pfn == zero_pfn) || (is_uksm_zero_pfn(pfn));
+	return pfn == zero_pfn;
 }
 #endif
 
@@ -765,8 +740,6 @@ static inline unsigned long my_zero_pfn(unsigned long addr)
 {
 	return zero_pfn;
 }
-#else
-#define is_zero_pfn(pfn)   (is_zero_pfn(pfn) || is_uksm_zero_pfn(pfn))
 #endif
 
 /*
@@ -984,11 +957,6 @@ copy_one_pte(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 			rss[MM_ANONPAGES]++;
 		else
 			rss[MM_FILEPAGES]++;
-
-    /* Should return NULL in vm_normal_page() */
-    uksm_bugon_zeropage(pte);
-  } else {
-    uksm_map_zero_page(pte);
 	}
 
 out_set_pte:
@@ -1009,7 +977,7 @@ int copy_pte_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 #ifdef CONFIG_TIMA_RKP_L2_GROUP
         unsigned long tima_l2group_flag = 0;
         tima_l2group_entry_t *tima_l2group_buffer = NULL;
-        unsigned long tima_l2group_numb_entries = ((end-addr) >> PAGE_SHIFT);
+        unsigned long tima_l2group_numb_entries;
         unsigned long tima_l2group_buffer_index = 0;
 #endif
 
@@ -1026,6 +994,11 @@ again:
 	orig_dst_pte = dst_pte;
 	arch_enter_lazy_mmu_mode();
 #ifdef CONFIG_TIMA_RKP_L2_GROUP
+	/* Initialize all L2_GROUP variables */
+	tima_l2group_flag= 0;
+	tima_l2group_buffer = NULL;
+	tima_l2group_numb_entries = ((end-addr) >> PAGE_SHIFT);
+	tima_l2group_buffer_index = 0;
         /*
          * Lazy mmu mode for tima:
          * 1-Define a memory area to hold the PTEs to be changed
@@ -1105,7 +1078,7 @@ again:
 		 */
 		if (tima_l2group_buffer_index) {
 			timal2group_set_pte_commit(tima_l2group_buffer,
-						tima_l2group_buffer_index);
+						tima_l2group_buffer_index, (void*)src_pte);
 		}
 		free_pages((unsigned long) tima_l2group_buffer, 1);
 	}
@@ -1255,12 +1228,12 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	spinlock_t *ptl;
 	pte_t *start_pte;
 	pte_t *pte;
+
 again:
 	init_rss_vec(rss);
 	start_pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	pte = start_pte;
 	arch_enter_lazy_mmu_mode();
-
 	do {
 		pte_t ptent = *pte;
 		if (pte_none(ptent)) {
@@ -1292,10 +1265,8 @@ again:
 			ptent = ptep_get_and_clear_full(mm, addr, pte,
 							tlb->fullmm);
 			tlb_remove_tlb_entry(tlb, pte, addr);
-                        if (unlikely(!page)) {
-                            uksm_unmap_zero_page(ptent);
+			if (unlikely(!page))
 				continue;
-                        }
 			if (unlikely(details) && details->nonlinear_vma
 			    && linear_page_index(details->nonlinear_vma,
 						addr) != page->index)
@@ -1868,7 +1839,7 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
 				page = vm_normal_page(vma, start, *pte);
 				if (!page) {
 					if (!(gup_flags & FOLL_DUMP) &&
-					     (is_zero_pfn(pte_pfn(*pte))))
+					     is_zero_pfn(pte_pfn(*pte)))
 						page = pte_page(*pte);
 					else {
 						pte_unmap(pte);
@@ -2688,10 +2659,8 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
 			clear_page(kaddr);
 		kunmap_atomic(kaddr);
 		flush_dcache_page(dst);
-	} else {
+	} else
 		copy_user_highpage(dst, src, va, vma);
-    uksm_cow_page(vma, src);
-  }
 }
 
 /*
@@ -2889,7 +2858,6 @@ gotten:
 		new_page = alloc_zeroed_user_highpage_movable(vma, address);
 		if (!new_page)
 			goto oom;
-                uksm_cow_pte(vma, orig_pte);
 	} else {
 		new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, address);
 		if (!new_page)
@@ -2911,11 +2879,8 @@ gotten:
 				dec_mm_counter_fast(mm, MM_FILEPAGES);
 				inc_mm_counter_fast(mm, MM_ANONPAGES);
 			}
-                        uksm_bugon_zeropage(orig_pte);
-                      } else {
-                        uksm_unmap_zero_page(orig_pte);
+		} else
 			inc_mm_counter_fast(mm, MM_ANONPAGES);
-                        }
 		flush_cache_page(vma, address, pte_pfn(orig_pte));
 		entry = mk_pte(new_page, vma->vm_page_prot);
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
@@ -3143,7 +3108,6 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	delayacct_set_flag(DELAYACCT_PF_SWAPIN);
 	page = lookup_swap_cache(entry);
 	if (!page) {
-		grab_swap_token(mm); /* Contend for token _before_ read-in */
 		page = swapin_readahead(entry,
 					GFP_HIGHUSER_MOVABLE, vma, address);
 		if (!page) {
@@ -3171,12 +3135,9 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 		goto out_release;
 	}
-#ifdef CONFIG_ZSWAP
-	else if (!(flags & FAULT_FLAG_TRIED))
-		swap_cache_hit(vma);
-#endif
 
 	locked = lock_page_or_retry(page, mm, flags);
+
 	delayacct_clear_flag(DELAYACCT_PF_SWAPIN);
 	if (!locked) {
 		ret |= VM_FAULT_RETRY;

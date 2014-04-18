@@ -1,7 +1,7 @@
 VERSION = 3
 PATCHLEVEL = 4
-SUBLEVEL = 78
-EXTRAVERSION =-BioShock-N900T
+SUBLEVEL = 86
+EXTRAVERSION =_BioShock_5.0-
 NAME = Saber-toothed Squirrel
 
 # *DOCUMENTATION*
@@ -195,7 +195,7 @@ export KBUILD_BUILDHOST := $(SUBARCH)
 #ARCH		?= $(SUBARCH)
 #CROSS_COMPILE	?= $(CONFIG_CROSS_COMPILE:"%"=%)
 ARCH		?= arm
-CROSS_COMPILE	= /home/jamison/android/toolchain/eabi-linaro-4.7/bin/arm-eabi-
+CROSS_COMPILE	= /home/jamison/android/toolchain/arm-eabi-4.7/bin/arm-eabi-
 
 # Architecture as present in compile.h
 UTS_MACHINE 	:= $(ARCH)
@@ -350,7 +350,6 @@ CHECK		= sparse
 # Use the wrapper for the compiler.  This wrapper scans for new
 # warnings and causes the build to stop upon encountering them.
 CC		= $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
-#CC		= $(REAL_CC)
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
@@ -375,7 +374,6 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
-		   -march=armv7-a \
                    -mtune=cortex-a15 \
                    -fmodulo-sched -fmodulo-sched-allow-regmoves \
                    -funswitch-loops -fpredictive-commoning -fgcse-after-reload \

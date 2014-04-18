@@ -41,10 +41,6 @@ if [ -f "/system/xbin/daemonsu" ]; then
    [ ! "`ps | grep daemonsu`" ] && /system/xbin/daemonsu --auto-daemon &
 fi
 
-pm disable com.sec.knox.seandroid
-
-/system/xbin/busybox run-parts /system/etc/init.d
-
 stop thermal-engine
-sleep 2
+/system/xbin/busybox run-parts /system/etc/init.d
 start thermal-engine

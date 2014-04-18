@@ -221,6 +221,7 @@ int msm_jpeg_evt_get(struct msm_jpeg_device *pgmn_dev,
 		return -EAGAIN;
 	}
 
+	memset(&ctrl_cmd, 0, sizeof(ctrl_cmd));
 	ctrl_cmd.type = buf_p->vbuf.type;
 	kfree(buf_p);
 
@@ -666,8 +667,6 @@ int msm_jpeg_ioctl_hw_cmd(struct msm_jpeg_device *pgmn_dev,
 			JPEG_PR_ERR("%s:%d] failed\n", __func__, __LINE__);
 			return -EFAULT;
 		}
-	} else {
-		return is_copy_to_user;
 	}
 
 	return 0;

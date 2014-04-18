@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd_sdio.c 421040 2013-08-30 04:23:15Z $
+ * $Id: dhd_sdio.c 445342 2013-12-26 06:03:12Z $
  */
 
 #include <typedefs.h>
@@ -164,7 +164,11 @@ extern void bcmsdh_set_irq(int flag);
 #ifdef PROP_TXSTATUS
 extern void dhd_wlfc_txcomplete(dhd_pub_t *dhd, void *txp, bool success);
 extern void dhd_wlfc_trigger_pktcommit(dhd_pub_t *dhd);
-#endif
+#ifdef DHDTCPACK_SUPPRESS
+extern int dhd_os_wlfc_block(dhd_pub_t *pub);
+extern int dhd_os_wlfc_unblock(dhd_pub_t *pub);
+#endif /* DHDTCPACK_SUPPRESS */
+#endif /* PROP_TXSTATUS */
 
 #if defined(MULTIPLE_SUPPLICANT)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 25))
@@ -792,7 +796,7 @@ dhdsdio_sr_cap(dhd_bus_t *bus)
 
 		if ((bus->sih->chip == BCM4350_CHIP_ID) ||
 			0)
-				enabval &= CC_CHIPCTRL3_SR_ENG_ENABLE;
+			enabval &= CC_CHIPCTRL3_SR_ENG_ENABLE;
 
 
 		if (enabval)
@@ -880,6 +884,10 @@ dhdsdio_clk_kso_init(dhd_bus_t *bus)
 
 #define KSO_DBG(x)
 #define KSO_WAIT_US 50
+#define KSO_WAIT_MS 1
+#define KSO_SLEEP_RETRY_COUNT 20
+#define ERROR_BCME_NODEVICE_MAX 1
+
 #if defined(CUSTOMER_HW4)
 #define MAX_KSO_ATTEMPTS 64
 #else
@@ -915,7 +923,11 @@ dhdsdio_clk_kso_enab(dhd_bus_t *bus, bool on)
 			break;
 
 		KSO_DBG(("%s> KSO wr/rd retry:%d, ERR:%x \n", __FUNCTION__, try_cnt, err));
-		OSL_DELAY(KSO_WAIT_US);
+
+		if (((try_cnt + 1) % KSO_SLEEP_RETRY_COUNT) == 0) {
+			OSL_SLEEP(KSO_WAIT_MS);
+		} else
+			OSL_DELAY(KSO_WAIT_US);
 
 		bcmsdh_cfg_write(bus->sdh, SDIO_FUNC_1, SBSDIO_FUNC1_SLEEPCSR, wr_val, &err);
 	} while (try_cnt++ < MAX_KSO_ATTEMPTS);
@@ -1091,6 +1103,12 @@ dhdsdio_clk_devsleep_iovar(dhd_bus_t *bus, bool on)
 				SBSDIO_FUNC1_CHIPCLKCSR, &err)) & SBSDIO_HT_AVAIL) !=
 				(SBSDIO_HT_AVAIL)), (10000));
 
+			DHD_TRACE(("%s: SBSDIO_FUNC1_CHIPCLKCSR : 0x%x\n", __FUNCTION__, csr));
+			if (!err && ((csr & SBSDIO_HT_AVAIL) != SBSDIO_HT_AVAIL)) {
+				DHD_ERROR(("%s:ERROR: device NOT Ready! 0x%x\n",
+					__FUNCTION__, csr));
+				err = BCME_NODEVICE;
+			}
 		}
 	}
 
@@ -1098,9 +1116,10 @@ dhdsdio_clk_devsleep_iovar(dhd_bus_t *bus, bool on)
 	if (err == 0)
 		bus->kso = on ? FALSE : TRUE;
 	else {
-		DHD_ERROR(("%s: Sleep request failed: on:%d err:%d\n", __FUNCTION__, on, err));
+		DHD_ERROR(("%s: Sleep request failed: kso:%d on:%d err:%d\n",
+			__FUNCTION__, bus->kso, on, err));
 		if (!on && retry > 2)
-			bus->kso = TRUE;
+			bus->kso = FALSE;
 	}
 
 	return err;
@@ -1430,6 +1449,9 @@ dhdsdio_bussleep(dhd_bus_t *bus, bool sleep)
 	          (sleep ? "SLEEP" : "WAKE"),
 	          (bus->sleeping ? "SLEEP" : "WAKE")));
 
+	if (bus->dhd->hang_was_sent)
+		return BCME_ERROR;
+
 	/* Done if we're already in the requested state */
 	if (sleep == bus->sleeping)
 		return BCME_OK;
@@ -1438,7 +1460,8 @@ dhdsdio_bussleep(dhd_bus_t *bus, bool sleep)
 	if (sleep) {
 		/* Don't sleep if something is pending */
 #ifdef CUSTOMER_HW4
-		if (bus->dpc_sched || bus->rxskip || pktq_len(&bus->txq) || bus->readframes)
+		if (bus->dpc_sched || bus->rxskip || pktq_len(&bus->txq) || bus->readframes ||
+			bus->ctrl_frame_stat)
 #else
 		if (bus->dpc_sched || bus->rxskip || pktq_len(&bus->txq))
 #endif /* CUSTOMER_HW4 */
@@ -1757,6 +1780,7 @@ dhd_tcpack_suppress(dhd_pub_t *dhdp, void *pkt)
 					* but not delayedequeued yet, it may not have
 					* any additional header yet.
 					*/
+					dhd_os_wlfc_block(dhdp);
 					if (dhdp->wlfc_state &&	(PKTLEN(dhdp->osh, prevpkt) ==
 						tcp_ack_info->ip_tcp_ttllen + ETHER_HDR_LEN))
 						pushed_len = 0;
@@ -1772,6 +1796,9 @@ dhd_tcpack_suppress(dhd_pub_t *dhdp, void *pkt)
 							" TCP ACK replace %ud -> %ud\n", prevpkt,
 							tcp_ack_info->tcpack_number, tcp_ack_num));
 						tcp_ack_info->tcpack_number = tcp_ack_num;
+#ifdef PROP_TXSTATUS
+						dhd_os_wlfc_unblock(dhdp);
+#endif
 						dhd_os_tcpackunlock(dhdp);
 						return TRUE;
 					} else
@@ -1780,6 +1807,10 @@ dhd_tcpack_suppress(dhd_pub_t *dhdp, void *pkt)
 							PKTLEN(dhdp->osh, pkt), ip_tcp_ttllen,
 							PKTLEN(dhdp->osh, prevpkt),
 							tcp_ack_info->ip_tcp_ttllen));
+#ifdef PROP_TXSTATUS
+							dhd_os_wlfc_unblock(dhdp);
+#endif
+
 				} else {
 #ifdef TCPACK_TEST
 					void *prevpkt = tcp_ack_info->p_tcpackinqueue;
@@ -2552,6 +2583,7 @@ dhdsdio_sendpendctl(dhd_bus_t *bus)
 int
 dhd_bus_txctl(struct dhd_bus *bus, uchar *msg, uint msglen)
 {
+	static int err_nodevice = 0;
 	uint8 *frame;
 	uint16 len;
 	uint32 swheader;
@@ -2679,6 +2711,7 @@ dhd_bus_txctl(struct dhd_bus *bus, uchar *msg, uint msglen)
 	}
 
 	bus->dhd->txcnt_timeout = 0;
+	bus->ctrl_frame_stat = TRUE;
 
 	if (ret == -1) {
 #ifdef DHD_DEBUG
@@ -2729,6 +2762,7 @@ dhd_bus_txctl(struct dhd_bus *bus, uchar *msg, uint msglen)
 			}
 		} while ((ret < 0) && retries++ < TXRETRIES);
 	}
+	bus->ctrl_frame_stat = FALSE;
 
 done:
 	if ((bus->idletime == DHD_IDLE_IMMEDIATE) && !bus->dpc_sched) {
@@ -2746,7 +2780,12 @@ done:
 	if (bus->dhd->txcnt_timeout >= MAX_CNTL_TX_TIMEOUT)
 		return -ETIMEDOUT;
 
-	return ret ? -EIO : 0;
+	if (ret == BCME_NODEVICE)
+		err_nodevice++;
+	else
+		err_nodevice = 0;
+
+	return ret ? err_nodevice >= ERROR_BCME_NODEVICE_MAX ? -ETIMEDOUT : -EIO : 0;
 }
 
 int
@@ -4855,7 +4894,7 @@ dhd_bus_init(dhd_pub_t *dhdp, bool enforce_mutex)
 		bus->hostintmask &= ~I_CHIPACTIVE;
 		W_SDREG(bus->hostintmask, &bus->regs->hostintmask, retries);
 		DHD_INFO(("%s: disable I_CHIPACTIVE in hostintmask[0x%08x]\n",
-		__FUNCTION__, bus->hostintmask));
+			__FUNCTION__, bus->hostintmask));
 	}
 	else
 		bcmsdh_cfg_write(bus->sdh, SDIO_FUNC_1,
@@ -6325,16 +6364,18 @@ dhdsdio_dpc(dhd_bus_t *bus)
 #endif
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 
+	dhd_os_sdlock(bus->dhd);
+
 	if (bus->dhd->busstate == DHD_BUS_DOWN) {
 		DHD_ERROR(("%s: Bus down, ret\n", __FUNCTION__));
 		bus->intstatus = 0;
+	        dhd_os_sdunlock(bus->dhd);
+
 		return 0;
 	}
 
 	/* Start with leftover status bits */
 	intstatus = bus->intstatus;
-
-	dhd_os_sdlock(bus->dhd);
 
 	if (!SLPAUTO_ENAB(bus) && !KSO_ENAB(bus)) {
 		DHD_ERROR(("%s: Device asleep\n", __FUNCTION__));
@@ -6987,6 +7028,9 @@ dhd_bus_watchdog(dhd_pub_t *dhdp)
 	if (bus->dhd->dongle_reset)
 		return FALSE;
 
+	if (bus->dhd->hang_was_sent)
+		return FALSE;
+
 	/* Ignore the timer if simulating bus down */
 	if (!SLPAUTO_ENAB(bus) && bus->sleeping)
 		return FALSE;
@@ -7087,7 +7131,7 @@ dhd_bus_watchdog(dhd_pub_t *dhdp)
 	}
 #else
 	if ((bus->idletime > 0) && (bus->clkstate == CLK_AVAIL)) {
-		if (++bus->idlecount > bus->idletime) {
+		if (++bus->idlecount >= bus->idletime) {
 			bus->idlecount = 0;
 			if (bus->activity) {
 				bus->activity = FALSE;
@@ -7493,7 +7537,7 @@ dhdsdio_probe_attach(struct dhd_bus *bus, osl_t *osh, void *sdh, void *regsva,
 		DHD_ERROR(("%s: FAILED to return to SI_ENUM_BASE\n", __FUNCTION__));
 	}
 
-#ifndef BCMSPI	    /* wake-wlan in gSPI will bring up the htavail/alpavail clocks. */
+#ifndef BCMSPI	/* wake-wlan in gSPI will bring up the htavail/alpavail clocks. */
 
 	/* Force PLL off until si_attach() programs PLL control regs */
 
@@ -7841,6 +7885,17 @@ dhdsdio_download_firmware(struct dhd_bus *bus, osl_t *osh, void *sdh)
 {
 	bool ret;
 
+#if defined(SUPPORT_MULTIPLE_REVISION)
+	if (concate_revision(bus, bus->fw_path, sizeof(bus->fw_path),
+		bus->nv_path, sizeof(bus->nv_path)) != 0) {
+		DHD_ERROR(("%s: fail to concatnate revison \n",
+			__FUNCTION__));
+		return BCME_BADARG;
+	}
+#endif /* SUPPORT_MULTIPLE_REVISION */
+
+	DHD_TRACE_HW4(("%s: firmware path=%s, nvram path=%s\n",
+		__FUNCTION__, bus->fw_path, bus->nv_path));
 	DHD_OS_WAKE_LOCK(bus->dhd);
 
 	/* Download the firmware */
@@ -8731,6 +8786,41 @@ static int concate_revision_bcm43241(dhd_bus_t *bus,
 	return 0;
 }
 
+static int
+concate_revision_bcm43341
+	(dhd_bus_t *bus, char *fw_path, int fw_path_len, char *nv_path, int nv_path_len)
+{
+	uint chipver;
+#if defined(SUPPORT_MULTIPLE_CHIPS)
+	char chipver_tag[10] = "_43341";
+#else
+	char chipver_tag[4] = {0, };
+#endif /* defined(SUPPORT_MULTIPLE_CHIPS) */
+
+	DHD_TRACE(("%s: BCM43341 Multiple Revision Check\n", __FUNCTION__));
+	if (bus->sih->chip != BCM43341_CHIP_ID) {
+		DHD_ERROR(("%s:Chip is not BCM43341\n", __FUNCTION__));
+		return -1;
+	}
+	chipver = bus->sih->chiprev;
+	DHD_ERROR(("CHIP VER = [0x%x]\n", chipver));
+	if (chipver == 0x1) {
+		DHD_ERROR(("----- CHIP bcm43341_A0 -----\n"));
+		strcat(chipver_tag, "_a0");
+	} else if (chipver == 0x2) {
+		DHD_ERROR(("----- CHIP bcm43341_B0 -----\n"));
+		strcat(chipver_tag, "_b0");
+	} else {
+		DHD_ERROR(("----- CHIP bcm43341 unknown revision %d -----\n",
+			chipver));
+	}
+
+	strcat(fw_path, chipver_tag);
+	strcat(nv_path, chipver_tag);
+	return 0;
+}
+
+
 int
 concate_revision(dhd_bus_t *bus, char *fw_path, int fw_path_len, char *nv_path, int nv_path_len)
 {
@@ -8765,6 +8855,10 @@ concate_revision(dhd_bus_t *bus, char *fw_path, int fw_path_len, char *nv_path, 
 	case BCM4324_CHIP_ID:
 		res = concate_revision_bcm43241(bus, fw_path, fw_path_len, nv_path, nv_path_len);
 		break;
+	case BCM43341_CHIP_ID:
+		res =  concate_revision_bcm43341(bus, fw_path, fw_path_len,
+			nv_path, nv_path_len);
+		break;
 	default:
 		DHD_ERROR(("REVISION SPECIFIC feature is not required\n"));
 		return res;
@@ -8775,6 +8869,13 @@ concate_revision(dhd_bus_t *bus, char *fw_path, int fw_path_len, char *nv_path, 
 	return res;
 }
 #endif /* SUPPORT_MULTIPLE_REVISION */
+
+void
+dhd_bus_update_fw_nv_path(struct dhd_bus *bus, char *pfw_path, char *pnv_path)
+{
+	bus->fw_path = pfw_path;
+	bus->nv_path = pnv_path;
+}
 
 int
 dhd_enableOOB(dhd_pub_t *dhd, bool sleep)

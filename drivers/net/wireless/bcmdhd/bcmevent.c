@@ -20,7 +20,7 @@
  *      Notwithstanding the above, under no circumstances may you combine this
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
- * $Id: bcmevent.c 389384 2013-03-06 12:20:17Z $
+ * $Id: bcmevent.c 440872 2013-12-04 05:25:35Z $
  */
 
 #include <typedefs.h>
@@ -160,6 +160,9 @@ const bcmevent_name_t bcmevent_names[] = {
 	{ WLC_E_PROXD, "WLC_E_PROXD" },
 #endif
 	{ WLC_E_CCA_CHAN_QUAL, "CCA_BASED_CHANNEL_QUALITY" },
+#ifdef WLAIBSS
+	{ WLC_E_AIBSS_TXFAIL, "WLC_E_AIBSS_TXFAIL"},
+#endif /* WLAIBSS */
 	{ WLC_E_CCX_S69_RESP_RX, "CCX_S69_RESPONSE"},
 };
 

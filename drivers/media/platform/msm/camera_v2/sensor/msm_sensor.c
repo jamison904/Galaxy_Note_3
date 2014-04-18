@@ -33,6 +33,7 @@ uint16_t back_cam_fw_version = 0;
 #endif
 int led_torch_en;
 int led_flash_en;
+struct task_struct	*qdaemon_task;
 
 static int32_t msm_sensor_get_dt_data(struct device_node *of_node,
 	struct msm_sensor_ctrl_t *s_ctrl)
@@ -298,6 +299,8 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl,
 			s_ctrl->sensor_state);
 		return -EINVAL;
 	}
+
+	qdaemon_task = current;
 
 	pr_warn("[%s:%d] %s", __func__, __LINE__,
 		sensor_name);
@@ -594,8 +597,6 @@ int msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 		reg_setting = NULL;
 		break;
 	}
-
-#if defined(CONFIG_MACH_HLTEEUR) || defined(CONFIG_MACH_HLTEKTT)
 	case CFG_SLAVE_READ_I2C: {
 		struct msm_camera_i2c_read_config read_config;
 		uint16_t local_data = 0;
@@ -646,7 +647,6 @@ int msm_sensor_config(struct msm_sensor_ctrl_t *s_ctrl, void __user *argp)
 		}
 		break;
 	}	
-#endif
 
 	case CFG_WRITE_I2C_SEQ_ARRAY: {
 		struct msm_camera_i2c_seq_reg_setting conf_array;

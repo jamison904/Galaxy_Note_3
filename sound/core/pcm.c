@@ -814,12 +814,24 @@ static int snd_pcm_new_stream_soc_be(struct snd_pcm *pcm, int stream,
 
 /**
  * snd_pcm_new_soc_be - create a new PCM instance for ASoC BE DAI link
+ * @card: the card instance
+ * @id: the id string
+ * @device: the device index (zero based - shared with normal PCMs)
+ * @playback_count: the number of substreams for playback
+ * @capture_count: the number of substreams for capture
+ * @rpcm: the pointer to store the new pcm instance
+ *
  * Creates a new PCM instance with no userspace device or procfs entries.
  * This is used by ASoC Back End PCMs in order to create a PCM that will only
  * be used internally by kernel drivers. i.e. it cannot be opened by userspace.
  * It also provides existing ASoC components drivers with a substream and
  * access to any private data.
-*/
+ *
+ * The pcm operators have to be set afterwards to the new instance
+ * via snd_pcm_set_ops().
+ *
+ * Returns zero if successful, or a negative error code on failure.
+ */
 int snd_pcm_new_soc_be(struct snd_card *card, const char *id, int device,
 	int playback_count, int capture_count,
 	struct snd_pcm ** rpcm)
@@ -865,7 +877,6 @@ int snd_pcm_new_soc_be(struct snd_card *card, const char *id, int device,
 }
 
 EXPORT_SYMBOL(snd_pcm_new_soc_be);
-
 /**
  * snd_pcm_new_internal - create a new internal PCM instance
  * @card: the card instance

@@ -27,10 +27,6 @@
 #include <linux/platform_device.h>
 #include <mach/scm.h>
 #include <mach/msm_memory_dump.h>
-#include <asm/cacheflush.h>
-#ifdef CONFIG_SEC_DEBUG
-#include <mach/sec_debug.h>
-#endif
 
 #define MODULE_NAME "msm_watchdog"
 #define WDT0_ACCSCSSNBARK_INT 0
@@ -72,7 +68,7 @@ struct msm_watchdog_data {
 
 /*
  * On the kernel command line specify
- * msm_watchdog.enable=1 to enable the watchdog
+ * msm_watchdog_v2.enable=1 to enable the watchdog
  * By default watchdog is turned on
  */
 static int enable = 1;
@@ -87,7 +83,7 @@ static void __iomem * wdog_base_addr;
 
 /*
  * On the kernel command line specify
- * msm_watchdog.WDT_HZ=<clock val in HZ> to set Watchdog
+ * msm_watchdog_v2.WDT_HZ=<clock val in HZ> to set Watchdog
  * ticks. By default it is set to 32765.
  */
 static long WDT_HZ = 32765;
@@ -238,7 +234,6 @@ static ssize_t wdog_disable_set(struct device *dev,
 
 static DEVICE_ATTR(disable, S_IWUSR | S_IRUSR, wdog_disable_get,
 							wdog_disable_set);
-
 #ifdef CONFIG_SEC_DEBUG
 static unsigned long long last_emerg_pet;
 void emerg_pet_watchdog(void)
@@ -253,8 +248,6 @@ void emerg_pet_watchdog(void)
 }
 EXPORT_SYMBOL(emerg_pet_watchdog);
 #endif
-
-
 
 static void pet_watchdog(struct msm_watchdog_data *wdog_dd)
 {
@@ -282,6 +275,7 @@ static void pet_watchdog(struct msm_watchdog_data *wdog_dd)
 #ifdef CONFIG_SEC_DEBUG
 	last_pet = time_ns;
 #endif
+
 }
 
 static void keep_alive_response(void *info)
@@ -364,19 +358,18 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 		wdog_dd->last_pet, nanosec_rem / 1000);
 	if (wdog_dd->do_ipi_ping)
 		dump_cpu_alive_mask(wdog_dd);
-
-#ifdef CONFIG_SEC_DEBUG
-	sec_debug_dump_stack();
-	dump_stack();
-	outer_flush_all();
-#endif
-	printk(KERN_INFO "Causing a watchdog bite!\n");
+	printk(KERN_INFO "Causing a watchdog bite!");
 	__raw_writel(1, wdog_dd->base + WDT0_BITE_TIME);
 	mb();
 	__raw_writel(1, wdog_dd->base + WDT0_RST);
 	mb();
 	/* Delay to make sure bite occurs */
 	mdelay(1);
+	pr_err("Wdog - STS: 0x%x, CTL: 0x%x, BARK TIME: 0x%x, BITE TIME: 0x%x",
+		__raw_readl(wdog_dd->base + WDT0_STS),
+		__raw_readl(wdog_dd->base + WDT0_EN),
+		__raw_readl(wdog_dd->base + WDT0_BARK_TIME),
+		__raw_readl(wdog_dd->base + WDT0_BITE_TIME));
 	panic("Failed to cause a watchdog bite! - Falling back to kernel panic!");
 	return IRQ_HANDLED;
 }
@@ -387,7 +380,6 @@ static irqreturn_t wdog_ppi_bark(int irq, void *dev_id)
 			*(struct msm_watchdog_data **)(dev_id);
 	return wdog_bark_handler(irq, wdog_dd);
 }
-
 #ifdef CONFIG_SEC_DEBUG
 unsigned int get_wdog_regsave_paddr(void)
 {
@@ -420,6 +412,7 @@ static void configure_bark_dump(struct msm_watchdog_data *wdog_dd)
 	regsave_vaddr = (unsigned int) wdog_dd->scm_regsave;
 	regsave_paddr = (unsigned int) virt_to_phys(wdog_dd->scm_regsave);
 #endif
+
 	if (wdog_dd->scm_regsave) {
 		cmd_buf.addr = virt_to_phys(wdog_dd->scm_regsave);
 		cmd_buf.len  = PAGE_SIZE;
@@ -502,6 +495,7 @@ static void init_watchdog_work(struct work_struct *work)
 #ifdef CONFIG_SEC_DEBUG
 	last_pet = wdog_dd->last_pet;
 #endif
+
 	error = device_create_file(wdog_dd->dev, &dev_attr_disable);
 	if (error)
 		dev_err(wdog_dd->dev, "cannot create sysfs attribute\n");
@@ -549,7 +543,7 @@ static int __devinit msm_wdog_dt_to_pdata(struct platform_device *pdev,
 		return -ENXIO;
 	}
 #ifdef CONFIG_SEC_DEBUG
-	wdog_base_addr = pdata->base;
+		wdog_base_addr = pdata->base;
 #endif
 
 	pdata->bark_irq = platform_get_irq(pdev, 0);
@@ -592,16 +586,10 @@ static int __devinit msm_watchdog_probe(struct platform_device *pdev)
 	}
 
 	if (!pdev->dev.of_node || !enable)
-	{
-		destroy_workqueue(wdog_wq);
 		return -ENODEV;
-	}
 	wdog_dd = kzalloc(sizeof(struct msm_watchdog_data), GFP_KERNEL);
 	if (!wdog_dd)
-	{
-		destroy_workqueue(wdog_wq);
 		return -EIO;
-	}
 	ret = msm_wdog_dt_to_pdata(pdev, wdog_dd);
 	if (ret)
 		goto err;

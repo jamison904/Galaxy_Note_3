@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: wl_android.h 367305 2012-11-07 13:49:55Z $
+ * $Id: wl_android.h 440872 2013-12-04 05:25:35Z $
  */
 
 #include <linux/module.h>
@@ -31,6 +31,9 @@
 /* If any feature uses the Generic Netlink Interface, put it here to enable WL_GENL
  * automatically
  */
+#if defined(BCMCCX_S69)
+#define WL_GENL
+#endif
 
 
 #ifdef WL_GENL
@@ -99,10 +102,15 @@ enum {
 	BCM_E_SVC_FOUND,
 	BCM_E_DEV_FOUND,
 	BCM_E_DEV_LOST,
+#ifdef BCMCCX_S69
 	BCM_E_DEV_S69RESP,
+#endif
 	BCM_E_MAX
 };
 
 s32 wl_genl_send_msg(struct net_device *ndev, u32 event_type,
 	u8 *string, u16 len, u8 *hdr, u16 hdrlen);
 #endif /* WL_GENL */
+#ifdef WLAIBSS
+s32 wl_netlink_send_msg(int pid, int seq, void *data, int size);
+#endif /* WLAIBSS */

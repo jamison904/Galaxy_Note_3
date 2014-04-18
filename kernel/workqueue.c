@@ -576,10 +576,7 @@ static struct cpu_workqueue_struct *get_work_cwq(struct work_struct *work)
 	if (data & WORK_STRUCT_CWQ)
 		return (void *)(data & WORK_STRUCT_WQ_DATA_MASK);
 	else
-	{
-		WARN_ON_ONCE(1);
 		return NULL;
-	}
 }
 
 static struct global_cwq *get_work_gcwq(struct work_struct *work)
@@ -1119,8 +1116,7 @@ static void delayed_work_timer_fn(unsigned long __data)
 	struct delayed_work *dwork = (struct delayed_work *)__data;
 	struct cpu_workqueue_struct *cwq = get_work_cwq(&dwork->work);
 
-	if (cwq != NULL)
-		__queue_work(smp_processor_id(), cwq->wq, &dwork->work);
+	__queue_work(smp_processor_id(), cwq->wq, &dwork->work);
 }
 
 /**
@@ -1474,12 +1470,19 @@ static void destroy_worker(struct worker *worker)
 	if (worker->flags & WORKER_IDLE)
 		pool->nr_idle--;
 
+	/*
+	 * Once WORKER_DIE is set, the kworker may destroy itself at any
+	 * point.  Pin to ensure the task stays until we're done with it.
+	 */
+	get_task_struct(worker->task);
+
 	list_del_init(&worker->entry);
 	worker->flags |= WORKER_DIE;
 
 	spin_unlock_irq(&gcwq->lock);
 
 	kthread_stop(worker->task);
+	put_task_struct(worker->task);
 	kfree(worker);
 
 	spin_lock_irq(&gcwq->lock);

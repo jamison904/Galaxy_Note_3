@@ -49,7 +49,6 @@
 #include <asm/uaccess.h>
 
 #include <trace/events/timer.h>
-
 #ifdef CONFIG_SEC_DEBUG
 #include <mach/sec_debug.h>
 #endif

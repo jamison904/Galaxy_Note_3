@@ -5,11 +5,14 @@
 
 enum msm_ion_heap_types {
 	ION_HEAP_TYPE_MSM_START = ION_HEAP_TYPE_CUSTOM + 1,
-	ION_HEAP_TYPE_IOMMU = ION_HEAP_TYPE_MSM_START,
-	ION_HEAP_TYPE_DMA,
+	ION_HEAP_TYPE_DMA = ION_HEAP_TYPE_MSM_START,
 	ION_HEAP_TYPE_CP,
 	ION_HEAP_TYPE_SECURE_DMA,
 	ION_HEAP_TYPE_REMOVED,
+	/*
+	 * if you add a heap type here you should also add it to
+	 * heap_types_info[] in msm_ion.c
+	 */
 };
 
 /**
@@ -31,16 +34,22 @@ enum ion_heap_ids {
 	ION_ADSP_HEAP_ID = 22,
 	ION_PIL1_HEAP_ID = 23, /* Currently used for other PIL images */
 	ION_SF_HEAP_ID = 24,
-	ION_IOMMU_HEAP_ID = 25,
+	ION_SYSTEM_HEAP_ID = 25,
 	ION_PIL2_HEAP_ID = 26, /* Currently used for modem firmware images */
 	ION_QSECOM_HEAP_ID = 27,
 	ION_AUDIO_HEAP_ID = 28,
 
 	ION_MM_FIRMWARE_HEAP_ID = 29,
-	ION_SYSTEM_HEAP_ID = 30,
 
 	ION_HEAP_ID_RESERVED = 31 /** Bit reserved for ION_FLAG_SECURE flag */
 };
+
+/*
+ * The IOMMU heap is deprecated! Here are some aliases for backwards
+ * compatibility:
+ */
+#define ION_IOMMU_HEAP_ID ION_SYSTEM_HEAP_ID
+#define ION_HEAP_TYPE_IOMMU ION_HEAP_TYPE_SYSTEM
 
 enum ion_fixed_position {
 	NOT_FIXED,
@@ -72,6 +81,12 @@ enum cp_mem_usage {
  */
 #define ION_FLAG_FORCE_CONTIGUOUS (1 << 30)
 
+/*
+ * Used in conjunction with heap which pool memory to force an allocation
+ * to come from the page allocator directly instead of from the pool allocation
+ */
+#define ION_FLAG_POOL_FORCE_ALLOC (1 << 16)
+
 /**
 * Deprecated! Please use the corresponding ION_FLAG_*
 */
@@ -84,7 +99,8 @@ enum cp_mem_usage {
 #define ION_HEAP(bit) (1 << (bit))
 
 #define ION_ADSP_HEAP_NAME	"adsp"
-#define ION_VMALLOC_HEAP_NAME	"vmalloc"
+#define ION_SYSTEM_HEAP_NAME	"system"
+#define ION_VMALLOC_HEAP_NAME	ION_SYSTEM_HEAP_NAME
 #define ION_KMALLOC_HEAP_NAME	"kmalloc"
 #define ION_AUDIO_HEAP_NAME	"audio"
 #define ION_SF_HEAP_NAME	"sf"
@@ -488,19 +504,6 @@ struct ion_flush_data {
 	unsigned int length;
 };
 
-/* struct ion_buffer_data
- *
- * @handle:	handle for the buffer being queried
- * @paddr:	The physical address of the buffer referenced by the handle
- * @length:	The length of the buffer referenced by the handle
- *
- * Gets the physicial address of the given handle
- */
-struct ion_buffer_data {
-	struct ion_handle *handle;
-	unsigned long paddr;
-	unsigned int length;
-};
 #define ION_IOC_MSM_MAGIC 'M'
 
 /**
@@ -525,11 +528,4 @@ struct ion_buffer_data {
 #define ION_IOC_CLEAN_INV_CACHES	_IOWR(ION_IOC_MSM_MAGIC, 2, \
 						struct ion_flush_data)
 
-/**
- * DOC: ION_IOC_GET_PHYS - get the physical address of the handle
- *
- * Gets the physicial address of the given handle
- */
-#define ION_IOC_GET_PHYS	_IOWR(ION_IOC_MSM_MAGIC, 4, \
-						struct ion_buffer_data)
 #endif

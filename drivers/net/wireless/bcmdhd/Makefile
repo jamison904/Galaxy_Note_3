@@ -3,7 +3,7 @@
 # SDIO Basic feature
 #####################
 
-DHDCFLAGS = -Wall -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER             \
+DHDCFLAGS += -Wall -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER             \
         -DBCMDONGLEHOST -DUNRELEASEDCHIP -DBCMDMA32 -DBCMFILEIMAGE            \
         -DDHDTHREAD -DBDC -DOOB_INTR_ONLY                                     \
         -DDHD_BCMEVENTS -DSHOW_EVENTS -DBCMDBG                                \
@@ -37,11 +37,11 @@ DHDCFLAGS += -DWL_CFG80211_VSDB_PRIORITIZE_SCAN_REQUEST
 # For p2p connection issue
 DHDCFLAGS += -DWL_SCB_TIMEOUT=10
 # For TDLS tear down inactive time 10 sec
-DHDCFLAGS += -DCUSTOM_TDLS_IDLE_MODE_SETTING=40000
+DHDCFLAGS += -DCUSTOM_TDLS_IDLE_MODE_SETTING=10000
 # for TDLS RSSI HIGH for establishing TDLS link
-DHDCFLAGS += -DCUSTOM_TDLS_RSSI_THRESHOLD_HIGH=-60
+DHDCFLAGS += -DCUSTOM_TDLS_RSSI_THRESHOLD_HIGH=-80
 # for TDLS RSSI HIGH for tearing down TDLS link
-DHDCFLAGS += -DCUSTOM_TDLS_RSSI_THRESHOLD_LOW=-70
+DHDCFLAGS += -DCUSTOM_TDLS_RSSI_THRESHOLD_LOW=-85
 
 # Roaming
 DHDCFLAGS += -DROAM_AP_ENV_DETECTION
@@ -99,6 +99,9 @@ DHDCFLAGS += -DCUSTOM_DPC_PRIO_SETTING=98
 # Priority mismatch fix with kernel stack
 DHDCFLAGS += -DPKTPRIO_OVERRIDE
 
+# Prevent rx thread monopolize
+DHDCFLAGS += -DWAIT_DEQUEUE
+
 # Config PM Control
 DHDCFLAGS += -DCONFIG_CONTROL_PM
 
@@ -119,6 +122,13 @@ DHDCFLAGS += -DWL_CFG80211_STA_EVENT
 # JellyBean Plus
 #################
 DHDCFLAGS += -DWL_SUPPORT_BACKPORTED_KPATCHES
+
+########################################################
+# Kitkat Only, These FLAGS should be removed on JB/JBP.
+########################################################
+DHDCFLAGS += -DWL_IFACE_COMB_NUM_CHANNELS
+DHDCFLAGS += -DWL_NEWCFG_PRIVCMD_SUPPORT
+DHDCFLAGS :=$(filter-out -DMULTIPLE_SUPPLICANT,$(DHDCFLAGS))
 
 ##########################
 # driver type
@@ -145,11 +155,12 @@ ifneq ($(CONFIG_BCM4339),)
   DHDCFLAGS += -DUSE_WL_TXBF
   DHDCFLAGS += -DUSE_WL_FRAMEBURST
   DHDCFLAGS += -DRXFRAME_THREAD
-  DHDCFLAGS += -DCUSTOM_AMPDU_BA_WSIZE=64
+  DHDCFLAGS += -DCUSTOM_AMPDU_BA_WSIZE=64 -DCUSTOM_IBSS_AMPDU_BA_WSIZE=16
   DHDCFLAGS += -DCUSTOM_DPC_CPUCORE=0
   DHDCFLAGS += -DPROP_TXSTATUS_VSDB
 ifeq ($(CONFIG_ARCH_MSM8974),y)
   DHDCFLAGS += -DCUSTOM_DEF_TXGLOM_SIZE=32 -DDHD_TXBOUND=32
+  DHDCFLAGS += -DENABLE_ADAPTIVE_SCHED -DCUSTOM_CPUFREQ_THRESH=1000000
 endif
   DHDCFLAGS += -DCUSTOM_MAX_TXGLOM_SIZE=32
 
@@ -158,16 +169,16 @@ endif
   DHDCFLAGS += -DBCMCCX
   DHDCFLAGS += -DWES_SUPPORT
   DHDCFLAGS += -DOKC_SUPPORT
-  DHDCFLAGS += -DWLTDLS -DWLTDLS_AUTO_ENABLE
+  DHDCFLAGS += -DWLTDLS
   DHDCFLAGS += -DWLFBT
   DHDCFLAGS += -DDHD_ENABLE_LPC
-  DHDCFLAGS += -DSUPPORT_IBSS
+  DHDCFLAGS += -DWLAIBSS
   DHDCFLAGS += -DSUPPORT_LTECX
 ifneq ($(CONFIG_2GHZ_VHT_NO_SUPPORT),y)
   DHDCFLAGS += -DSUPPORT_2G_VHT
 endif
   DHDCFLAGS += -DSUPPORT_WL_TXPOWER
-  DHDCFLAGS += -DWL_GENL
+  DHDCFLAGS += -DBCMCCX_S69
 ifeq ($(CONFIG_BCM4339),y)
   DHDCFLAGS += -DENABLE_INSMOD_NO_FW_LOAD
   DHDCFLAGS += -DUSE_LATE_INITCALL_SYNC
@@ -200,6 +211,7 @@ ifeq ($(CONFIG_MACH_JF),y)
 endif
 ifeq ($(CONFIG_ARCH_MSM8974),y)
   DHDCFLAGS += -DCUSTOM_DEF_TXGLOM_SIZE=32 -DDHD_TXBOUND=32
+  DHDCFLAGS += -DENABLE_ADAPTIVE_SCHED -DCUSTOM_CPUFREQ_THRESH=1000000
 endif
   DHDCFLAGS += -DCUSTOM_MAX_TXGLOM_SIZE=32
 
@@ -211,7 +223,7 @@ endif
   DHDCFLAGS += -DWLTDLS -DWLTDLS_AUTO_ENABLE
   DHDCFLAGS += -DWLFBT
   DHDCFLAGS += -DDHD_ENABLE_LPC
-  DHDCFLAGS += -DSUPPORT_IBSS
+  DHDCFLAGS += -DWLAIBSS
   DHDCFLAGS += -DSUPPORT_LTECX
   DHDCFLAGS += -DSUPPORT_2G_VHT
   DHDCFLAGS += -DSUPPORT_WL_TXPOWER
@@ -326,7 +338,7 @@ EXTRA_CFLAGS += -I$(src)/include/ -I$(src)/
 KBUILD_CFLAGS += -I$(LINUXDIR)/include -I$(shell pwd)
 
 DHDOFILES := bcmsdh.o bcmsdh_linux.o bcmsdh_sdmmc.o bcmsdh_sdmmc_linux.o \
-	dhd_cdc.o dhd_common.o dhd_wlfc.o dhd_ip.o dhd_custom_gpio.o dhd_custom_sec.o \
+	dhd_cdc.o dhd_pno.o dhd_common.o dhd_wlfc.o dhd_ip.o dhd_custom_gpio.o dhd_custom_sec.o \
 	dhd_linux.o dhd_linux_sched.o dhd_cfg80211.o dhd_sdio.o aiutils.o bcmevent.o \
 	bcmutils.o bcmwifi_channels.o hndpmu.o linux_osl.o sbutils.o siutils.o \
 	wl_android.o wl_cfg80211.o wl_cfgp2p.o wldev_common.o wl_linux_mon.o wl_roam.o

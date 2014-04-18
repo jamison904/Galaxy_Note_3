@@ -2957,6 +2957,54 @@ static void ext4_destroy_lazyinit_thread(void)
 
 	kthread_stop(ext4_lazyinit_task);
 }
+void print_block_data(struct super_block *sb, sector_t blocknr
+						, unsigned char *data_to_dump, int start, int len)
+{
+	int i, j;
+	int bh_offset = (start / 16) * 16;
+	char row_data[17] = { 0, };
+	char row_hex[50] = { 0, };
+	char ch;
+
+	printk(KERN_ERR "As EXT4-fs error, printing data in hex\n");
+	printk(KERN_ERR " [partition info] s_id : %s, start block# : %llu\n"
+			, sb->s_id, sb->s_bdev->bd_part->start_sect);
+	printk(KERN_ERR " dump block# : %llu, start offset(byte) :", blocknr);
+	printk(KERN_ERR " %d, length(byte) : %d\n", start, len);
+	printk(KERN_ERR "-------------------------------------------------\n");
+
+	for (i = 0; i < (len + 15) / 16; i++) {
+		for (j = 0; j < 16; j++) {
+			ch = *(data_to_dump + bh_offset + j);
+			if (start <= bh_offset + j
+				&& start + len > bh_offset + j) {
+
+				if (isascii(ch) && isprint(ch))
+					sprintf(row_data + j, "%c", ch);
+				else
+					sprintf(row_data + j, ".");
+
+				sprintf(row_hex + (j * 3), "%2.2x ", ch);
+				} else {
+					sprintf(row_data + j, " ");
+					sprintf(row_hex + (j * 3), "-- ");
+				}
+			}
+
+			printk(KERN_ERR "0x%4.4x : %s | %s\n"
+					, bh_offset, row_hex, row_data);
+			bh_offset += 16;
+		}
+		printk(KERN_ERR "---------------------------------------------------\n");
+}
+/* for debugging */
+
+// debugging code
+void print_bh(struct super_block *sb, struct buffer_head *bh
+				, int start, int len)
+{
+	print_block_data(sb, bh->b_blocknr, bh->b_data, start, len);
+}
 
 /*
  * Note: calculating the overhead so we can be compatible with
@@ -3370,16 +3418,22 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	for (i = 0; i < 4; i++)
 		sbi->s_hash_seed[i] = le32_to_cpu(es->s_hash_seed[i]);
 	sbi->s_def_hash_version = es->s_def_hash_version;
-	i = le32_to_cpu(es->s_flags);
-	if (i & EXT2_FLAGS_UNSIGNED_HASH)
-		sbi->s_hash_unsigned = 3;
-	else if ((i & EXT2_FLAGS_SIGNED_HASH) == 0) {
+	if (EXT4_HAS_COMPAT_FEATURE(sb, EXT4_FEATURE_COMPAT_DIR_INDEX)) {
+		i = le32_to_cpu(es->s_flags);
+		if (i & EXT2_FLAGS_UNSIGNED_HASH)
+			sbi->s_hash_unsigned = 3;
+		else if ((i & EXT2_FLAGS_SIGNED_HASH) == 0) {
 #ifdef __CHAR_UNSIGNED__
-		es->s_flags |= cpu_to_le32(EXT2_FLAGS_UNSIGNED_HASH);
-		sbi->s_hash_unsigned = 3;
+			if (!(sb->s_flags & MS_RDONLY))
+				es->s_flags |=
+					cpu_to_le32(EXT2_FLAGS_UNSIGNED_HASH);
+			sbi->s_hash_unsigned = 3;
 #else
-		es->s_flags |= cpu_to_le32(EXT2_FLAGS_SIGNED_HASH);
+			if (!(sb->s_flags & MS_RDONLY))
+				es->s_flags |=
+					cpu_to_le32(EXT2_FLAGS_SIGNED_HASH);
 #endif
+		}
 	}
 
 	/* Handle clustersize */
@@ -4883,54 +4937,6 @@ out:
 }
 
 #endif
-
-void print_bh(struct super_block *sb, struct buffer_head *bh
-		, int start, int len)
-{
-	print_block_data(sb, bh->b_blocknr, bh->b_data, start, len);
-}
-
-void print_block_data(struct super_block *sb, sector_t blocknr
-			, unsigned char *data_to_dump, int start, int len)
-{
-	int i, j;
-	int bh_offset = (start / 16) * 16;
-	char row_data[17] = { 0, };
-	char row_hex[50] = { 0, };
-	char ch;
-
-	printk(KERN_ERR "As EXT4-fs error, printing data in hex\n"
-		" [partition info] s_id : %s, start block# : %llu\n"
-		, sb->s_id, sb->s_bdev->bd_part->start_sect);
-	printk(KERN_ERR " dump block# : %llu, start offset(byte) :"
-		" %d, length(byte) : %d\n", blocknr, start, len);
-	printk(KERN_ERR "-------------------------------------------------\n");
-
-	for (i = 0; i < (len + 15) / 16; i++) {
-		for (j = 0; j < 16; j++) {
-			ch = *(data_to_dump + bh_offset + j);
-			if (start <= bh_offset + j
-				&& start + len > bh_offset + j) {
-
-				if (isascii(ch) && isprint(ch))
-					sprintf(row_data + j, "%c", ch);
-				else
-					sprintf(row_data + j, ".");
-
-				sprintf(row_hex + (j * 3), "%2.2x ", ch);
-			} else {
-				sprintf(row_data + j, " ");
-				sprintf(row_hex + (j * 3), "-- ");
-			}
-		}
-
-		printk(KERN_ERR "0x%4.4x : %s | %s\n"
-			, bh_offset, row_hex, row_data);
-		bh_offset += 16;
-	}
-	printk(KERN_ERR "---------------------------------------------------\n");
-}
-
 
 static struct dentry *ext4_mount(struct file_system_type *fs_type, int flags,
 		       const char *dev_name, void *data)

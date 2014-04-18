@@ -50,6 +50,9 @@ static DEFINE_PER_CPU(struct cpufreq_cpu_save_data, cpufreq_policy_save);
 #endif
 static DEFINE_SPINLOCK(cpufreq_driver_lock);
 
+static struct kset *cpufreq_kset;
+static struct kset *cpudev_kset;
+
 /*
  * cpu_policy_rwsem is a per CPU reader-writer semaphore designed to cure
  * all cpufreq/hotplug/workqueue/etc related lock issues.
@@ -424,6 +427,9 @@ static ssize_t show_cpuinfo_max_freq(struct cpufreq_policy *policy, char *buf)
 
 show_one(scaling_cur_freq, cur);
 show_one(cpu_utilization, util);
+#ifdef CONFIG_SEC_PM
+show_one(cpu_load, load_at_max);
+#endif
 
 static int __cpufreq_set_policy(struct cpufreq_policy *data,
 				struct cpufreq_policy *policy);
@@ -446,17 +452,23 @@ static ssize_t store_##file_name					\
 	if (ret != 1)							\
 		return -EINVAL;						\
 									\
+	policy->user_policy.object = new_policy.object;			\
+	new_policy.user_policy.object = new_policy.object;		\
+									\
 	ret = cpufreq_driver->verify(&new_policy);			\
 	if (ret)							\
 		pr_err("cpufreq: Frequency verification failed\n");	\
 									\
-	policy->user_policy.object = new_policy.object;			\
 	ret = __cpufreq_set_policy(policy, &new_policy);		\
 									\
 	return ret ? ret : count;					\
 }
 
-store_one(scaling_min_freq, min);
+#ifdef CONFIG_SEC_PM
+
+/* Disable scaling_min_freq store */
+	store_one(scaling_min_freq, min);
+#endif
 
 static ssize_t store_scaling_max_freq
         (struct cpufreq_policy *policy, const char *buf, size_t count)
@@ -472,6 +484,15 @@ static ssize_t store_scaling_max_freq
         if (ret != 1)
                 return -EINVAL;
 
+	policy->user_policy.max = new_policy.max;
+	new_policy.user_policy.max = new_policy.max;
+
+	ret = cpufreq_driver->verify(&new_policy);
+        if (ret)
+                pr_err("cpufreq: Frequency verification failed\n");
+
+        ret = __cpufreq_set_policy(policy, &new_policy);
+
 	// restart thermal-engine when something else changes maxfreq
         if (strcmp(current->comm, "thermal-engine")) {
 		struct task_struct *tsk;
@@ -479,9 +500,6 @@ static ssize_t store_scaling_max_freq
 		  if (!strcmp(tsk->comm,"thermal-engine")) send_sig(SIGKILL, tsk, 0);
 		pr_info("[imoseyon] thermal-engine restarting.\n");
 	}
-
-        ret = __cpufreq_set_policy(policy, &new_policy);
-        policy->user_policy.max = policy->max;
 
         return ret ? ret : count;
 }
@@ -548,6 +566,8 @@ static ssize_t store_scaling_governor(struct cpufreq_policy *policy,
 	policy->user_policy.governor = policy->governor;
 
 	sysfs_notify(&policy->kobj, NULL, "scaling_governor");
+
+	kobject_uevent(cpufreq_global_kobject, KOBJ_ADD);
 
 	if (ret)
 		return ret;
@@ -669,13 +689,13 @@ extern void vc_set_vdd(const char *buf);
 
 static ssize_t show_UV_mV_table(struct cpufreq_policy *policy, char *buf)
 {
-	return vc_get_vdd(buf);
+       return vc_get_vdd(buf);
 }
 static ssize_t store_UV_mV_table
 (struct cpufreq_policy *policy, const char *buf, size_t count)
 {
-	vc_set_vdd(buf);
-	return count;
+       vc_set_vdd(buf);
+       return count;
 }
 
 cpufreq_freq_attr_ro_perm(cpuinfo_cur_freq, 0400);
@@ -689,12 +709,27 @@ cpufreq_freq_attr_ro(bios_limit);
 cpufreq_freq_attr_ro(related_cpus);
 cpufreq_freq_attr_ro(affected_cpus);
 cpufreq_freq_attr_ro(cpu_utilization);
+#ifdef CONFIG_SEC_PM
+cpufreq_freq_attr_ro(cpu_load);
+/* Disable scaling_min_freq store */
+#ifdef CONFIG_ARCH_MSM8226
+cpufreq_freq_attr_ro(scaling_min_freq);
+#else
 cpufreq_freq_attr_rw(scaling_min_freq);
+#endif
+#else
+#ifdef CONFIG_ARCH_MSM8226
+cpufreq_freq_attr_ro(scaling_min_freq);
+#else
+cpufreq_freq_attr_rw(scaling_min_freq);
+#endif
+#endif
+
+
 cpufreq_freq_attr_rw(scaling_max_freq);
 cpufreq_freq_attr_rw(scaling_governor);
 cpufreq_freq_attr_rw(scaling_setspeed);
-static struct freq_attr UV_mV_table = 
-	__ATTR(UV_mV_table, 0666, show_UV_mV_table, store_UV_mV_table);
+cpufreq_freq_attr_rw(UV_mV_table);
 
 static struct attribute *default_attrs[] = {
 	&cpuinfo_min_freq.attr,
@@ -704,6 +739,9 @@ static struct attribute *default_attrs[] = {
 	&scaling_max_freq.attr,
 	&affected_cpus.attr,
 	&cpu_utilization.attr,
+#ifdef CONFIG_SEC_PM
+	&cpu_load.attr,
+#endif
 	&related_cpus.attr,
 	&scaling_governor.attr,
 	&scaling_driver.attr,
@@ -923,6 +961,16 @@ static int cpufreq_add_dev_interface(unsigned int cpu,
 				   &dev->kobj, "cpufreq");
 	if (ret)
 		return ret;
+
+	/* create cpu device kset */
+	if (!cpudev_kset) {
+		cpudev_kset = kset_create_and_add("kset", NULL, &dev->kobj);
+		BUG_ON(!cpudev_kset);
+		dev->kobj.kset = cpudev_kset;
+	}
+
+	/* send uevent when cpu device is added */
+	kobject_uevent(&dev->kobj, KOBJ_ADD);
 
 	/* set up files for this cpu device */
 	drv_attr = cpufreq_driver->attr;
@@ -1785,10 +1833,13 @@ static int __cpufreq_set_policy(struct cpufreq_policy *data,
 	memcpy(&policy->cpuinfo, &data->cpuinfo,
 				sizeof(struct cpufreq_cpuinfo));
 
-	if (policy->min > data->user_policy.max
-		|| policy->max < data->user_policy.min) {
+	if (policy->min > data->max || policy->max < data->min) {
+		pr_debug("CPUFREQ: %s: pmin:%d, pmax:%d, min:%d, max:%d\n",
+			__func__, policy->min, policy->max, data->min, data->max);
+#ifndef CONFIG_SEC_PM
 		ret = -EINVAL;
 		goto error_out;
+#endif
 	}
 
 	/* verify the cpu speed can be set within this limit */
@@ -1937,28 +1988,6 @@ static int __cpuinit cpufreq_cpu_callback(struct notifier_block *nfb,
 		case CPU_ONLINE:
 		case CPU_ONLINE_FROZEN:
 			cpufreq_add_dev(dev, NULL);
-#ifdef CONFIG_SEC_DVFS
-			/* if min or max lock is set, online cpu needs to change it's own rate immediately after addind cpufreq_dev */
-			{
-				unsigned int target_freq, min_freq, max_freq;
-				struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
-				if (policy) {
-					min_freq = get_min_lock();
-					max_freq = get_max_lock();
-
-					target_freq = policy->cur;
-					if (min_freq && target_freq < min_freq)
-						target_freq = min_freq;
-					if (max_freq && target_freq > max_freq)
-						target_freq = max_freq;
-
-					if (target_freq != policy->cur)
-						__cpufreq_driver_target(policy, target_freq, CPUFREQ_RELATION_L);
-					
-					cpufreq_cpu_put(policy);				
-				}
-			}
-#endif			
 			break;
 		case CPU_DOWN_PREPARE:
 		case CPU_DOWN_PREPARE_FROZEN:
@@ -2099,6 +2128,12 @@ static int __init cpufreq_core_init(void)
 
 	cpufreq_global_kobject = kobject_create_and_add("cpufreq", &cpu_subsys.dev_root->kobj);
 	BUG_ON(!cpufreq_global_kobject);
+
+	/* create cpufreq kset */
+	cpufreq_kset = kset_create_and_add("kset", NULL, cpufreq_global_kobject);
+	BUG_ON(!cpufreq_kset);
+	cpufreq_global_kobject->kset = cpufreq_kset;
+
 	register_syscore_ops(&cpufreq_syscore_ops);
 
 	return 0;

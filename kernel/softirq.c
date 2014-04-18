@@ -32,6 +32,7 @@
 #ifdef CONFIG_SEC_DEBUG
 #include <mach/sec_debug.h>
 #endif
+
 /*
    - No shared variables, all the data are CPU local.
    - If a softirq needs serialization, let it serialize itself
@@ -345,6 +346,7 @@ void irq_exit(void)
 #ifdef CONFIG_SEC_DEBUG
 	secdbg_msg("hardirq exit");
 #endif
+
 	sub_preempt_count(IRQ_EXIT_OFFSET);
 	if (!in_interrupt() && local_softirq_pending())
 		invoke_softirq();

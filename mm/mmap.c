@@ -31,7 +31,6 @@
 #include <linux/perf_event.h>
 #include <linux/audit.h>
 #include <linux/khugepaged.h>
-#include <linux/ksm.h>
 
 #include <asm/uaccess.h>
 #include <asm/cacheflush.h>
@@ -39,6 +38,9 @@
 #include <asm/mmu_context.h>
 
 #include "internal.h"
+#ifdef CONFIG_SDCARD_FS
+#include "../fs/sdcardfs/sdcardfs.h"
+#endif
 
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
@@ -135,7 +137,7 @@ int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin)
 		 */
 		free -= global_page_state(NR_SHMEM);
 
-		free += nr_swap_pages;
+		free += get_nr_swap_pages();
 
 		/*
 		 * Any slabs which are created with the
@@ -238,7 +240,6 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
 			removed_exe_file_vma(vma->vm_mm);
 	}
 	mpol_put(vma_policy(vma));
-        uksm_remove_vma(vma);
 	kmem_cache_free(vm_area_cachep, vma);
 	return next;
 }
@@ -532,16 +533,9 @@ int vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	long adjust_next = 0;
 	int remove_next = 0;
 
-/*
- * to avoid deadlock, ksm_remove_vma must be done before any spin_lock is
- * acquired
- */
-  uksm_remove_vma(vma);
-
 	if (next && !insert) {
 		struct vm_area_struct *exporter = NULL;
 
-                uksm_remove_vma(next);
 		if (end >= next->vm_end) {
 			/*
 			 * vma expands, overlapping all the next, and
@@ -617,10 +611,10 @@ again:			remove_next = 1 + (end > next->vm_end);
 		if (adjust_next)
 			vma_prio_tree_remove(next, root);
 	}
-        vma->vm_start = start;
+
+	vma->vm_start = start;
 	vma->vm_end = end;
 	vma->vm_pgoff = pgoff;
-
 	if (adjust_next) {
 		next->vm_start += adjust_next << PAGE_SHIFT;
 		next->vm_pgoff += adjust_next;
@@ -673,15 +667,10 @@ again:			remove_next = 1 + (end > next->vm_end);
 		 */
 		if (remove_next == 2) {
 			next = vma->vm_next;
-                        uksm_remove_vma(next);
 			goto again;
 		}
-                } else {
-                  if (next && !insert)
-                  uksm_vma_add_new(next);
-	        }
+	}
 
-        uksm_vma_add_new(vma);
 	validate_mm(mm);
 
 	return 0;
@@ -1006,6 +995,11 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 	int error;
 	unsigned long reqprot = prot;
 
+#ifdef CONFIG_SDCARD_FS
+	if (file && (file->f_path.mnt->mnt_sb->s_magic == SDCARDFS_SUPER_MAGIC))
+		file = sdcardfs_lower_file(file);
+#endif
+
 	/*
 	 * Does the application expect PROT_READ to imply PROT_EXEC?
 	 *
@@ -1048,9 +1042,6 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
 	 */
 	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
-
-  /* If uksm is enabled, we add VM_MERGABLE to new VMAs. */
-  uksm_vm_flags_mod(&vm_flags);
 
 	if (flags & MAP_LOCKED)
 		if (!can_do_mlock())
@@ -1420,14 +1411,12 @@ munmap_back:
 
 	vma_link(mm, vma, prev, rb_link, rb_parent);
 	file = vma->vm_file;
-        uksm_vma_add_new(vma);
 
 #ifdef CONFIG_TIMA_RKP
 	if(file && (strcmp(current->comm, "zygote") == 0)){
 		char *tmp;
 		char *pathname;
 		struct path path;
-		unsigned long cmd_id = 0x3f830221;
 
 		path = file->f_path;
 		path_get(&file->f_path);
@@ -1447,20 +1436,13 @@ munmap_back:
 			return PTR_ERR(pathname);
 		}
 		
-		if ((strstr(pathname, "dalvik-heap") != NULL) || (strstr(pathname, "dalvik-bitmap") != NULL)){
-			printk("PROC %s\tFILE %s\tSTART %lx\tLEN %lx\n", current->comm, pathname, addr, len);
-			__asm__ __volatile__ (    
-#if __GNUC__ >= 4 && __GNUC_MINOR__ >= 6
-        				".arch_extension sec\n"
-#endif	
-					"stmfd  sp!,{r0-r3, r11}\n"
-					"mov    r11, r0\n"
-					"mov    r0, %0\n" //The first parameter is cmd id
-					"mov    r1, %1\n" //second is address
-					"mov    r2, %2\n" //third  is len
-					"smc    #1\n"
-					"ldmfd	sp!, {r0-r3, r11}\n"
-					::"r"(cmd_id), "r"(addr), "r"(len):"r0","r1","r2","r11","cc");
+		if (strstr(pathname, "dalvik-heap") != NULL 
+				|| strstr(pathname, "dalvik-bitmap") != NULL
+				|| strstr(pathname, "dalvik-LinearAlloc") != NULL 
+				|| strstr(pathname, "dalvik-mark-stack") != NULL
+				|| strstr(pathname, "dalvik-card-table") != NULL) {
+			//printk("PROC %s\tFILE %s\tSTART %lx\tLEN %lx\n", current->comm, pathname, addr, len);
+			tima_send_cmd2(addr, len, 0x3f830221);
 		}
 
 		/* do something here with pathname */
@@ -1492,7 +1474,6 @@ unmap_and_free_vma:
 	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
 	charged = 0;
 free_vma:
-        uksm_remove_vma(vma);
 	kmem_cache_free(vm_area_cachep, vma);
 unacct_error:
 	if (charged)
@@ -2149,8 +2130,6 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
 	else
 		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
 
-  uksm_vma_add_new(new);
-
 	/* Success. */
 	if (!err)
 		return 0;
@@ -2324,7 +2303,6 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
 		return error;
 
 	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
-        uksm_vm_flags_mod(&flags);
 
 	error = get_unmapped_area(NULL, addr, len, 0, MAP_FIXED);
 	if (error & ~PAGE_MASK)
@@ -2393,7 +2371,6 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
 	vma->vm_flags = flags;
 	vma->vm_page_prot = vm_get_page_prot(flags);
 	vma_link(mm, vma, prev, rb_link, rb_parent);
-        uksm_vma_add_new(vma);
 out:
 	perf_event_mmap(vma);
 	mm->total_vm += len >> PAGE_SHIFT;
@@ -2425,12 +2402,6 @@ void exit_mmap(struct mm_struct *mm)
 
 	/* mm's last user has gone, and its about to be pulled down */
 	mmu_notifier_release(mm);
-
-  /*
-   * Taking write lock on mmap_sem does not harm others,
-   * but it's crucial for uksm to avoid races.
-   */
-  down_write(&mm->mmap_sem);
 
 	if (mm->locked_vm) {
 		vma = mm->mmap;
@@ -2464,11 +2435,6 @@ void exit_mmap(struct mm_struct *mm)
 	 */
 	while (vma)
 		vma = remove_vma(vma);
-
-  mm->mmap = NULL;
-  mm->mm_rb = RB_ROOT;
-  mm->mmap_cache = NULL;
-  up_write(&mm->mmap_sem);
 
 	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
 }
@@ -2579,7 +2545,6 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 			if (new_vma->vm_ops && new_vma->vm_ops->open)
 				new_vma->vm_ops->open(new_vma);
 			vma_link(mm, new_vma, prev, rb_link, rb_parent);
-                        uksm_vma_add_new(new_vma);
 		}
 	}
 	return new_vma;
@@ -2685,10 +2650,10 @@ int install_special_mapping(struct mm_struct *mm,
 	ret = insert_vm_struct(mm, vma);
 	if (ret)
 		goto out;
+
 	mm->total_vm += len >> PAGE_SHIFT;
 
 	perf_event_mmap(vma);
-        uksm_vma_add_new(vma);
 
 	return 0;
 

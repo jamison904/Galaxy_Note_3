@@ -66,7 +66,6 @@ enum uart_core_type {
 	BLSP_HSUART,
 };
 
-
 #define DUMP_UART_PACKET 1
 #define FULL_DUMP_UART_PACKET 0
 

@@ -24,10 +24,49 @@
  * $Id: dhd_sec_feature.h$
  */
 
+/*
+*** Desciption ***
+1. Module vs COB
+   If your model's WIFI HW chip is COB type, you must add below feature
+   - #undef USE_CID_CHECK
+   - #define READ_MACADDR
+   Because COB type chip have not CID and Mac address.
+   So, you must add below feature to defconfig file.
+   - CONFIG_WIFI_BROADCOM_COB
+
+2. PROJECTS
+   If you want add some feature only own Project, you can add it in 'PROJECTS' part.
+
+3. Region code
+   If you want add some feature only own region model, you can use below code.
+   - 100 : EUR OPEN
+   - 101 : EUR ORG
+   - 200 : KOR OPEN
+   - 201 : KOR SKT
+   - 202 : KOR KTT
+   - 203 : KOR LGT
+   - 300 : CHN OPEN
+   - 400 : USA OPEN
+   - 401 : USA ATT
+   - 402 : USA TMO
+   - 403 : USA VZW
+   - 404 : USA SPR
+   - 405 : USA USC
+   You can refer how to using it below this file.
+   And, you can add more region code, too.
+*/
+
 #ifndef _dhd_sec_feature_h_
 #define _dhd_sec_feature_h_
 
-/* PROJECTS */
+/* For COB type feature */
+#ifdef CONFIG_WIFI_BROADCOM_COB
+#undef USE_CID_CHECK
+#define READ_MACADDR
+#endif  /* CONFIG_WIFI_BROADCOM_COB */
+
+
+/***** PROJECTS START ******/
 
 #if defined(CONFIG_MACH_SAMSUNG_ESPRESSO) || defined(CONFIG_MACH_SAMSUNG_ESPRESSO_10)
 #define READ_MACADDR
@@ -48,17 +87,6 @@
 #define READ_MACADDR
 #endif /* CONFIG_ARCH_MSM7X30 */
 
-#if defined(CONFIG_MACH_GC1) || defined(CONFIG_MACH_U1_NA_SPR) || \
-	defined(CONFIG_MACH_VIENNAEUR) || defined(CONFIG_MACH_LT03EUR) || \
-	defined(CONFIG_MACH_LT03SKT) || defined(CONFIG_MACH_LT03KTT) || \
-	defined(CONFIG_MACH_LT03LGT)
-#undef USE_CID_CHECK
-#define READ_MACADDR
-#endif	/* CONFIG_MACH_GC1 || CONFIG_MACH_U1_NA_SPR || CONFIG_MACH_VIENNAEUR ||
-	 * CONFIG_MACH_LT03EUR || CONFIG_MACH_LT03SKT || CONFIG_MACH_LT03KTT ||
-	 * CONFIG_MACH_LT03LGT
-	 */
-
 #ifdef CONFIG_MACH_P10
 #define READ_MACADDR
 #endif /* CONFIG_MACH_P10 */
@@ -68,7 +96,11 @@
 #define WIFI_TURNOFF_DELAY	200
 #endif /* CONFIG_ARCH_MSM8960 */
 
-/* REGION CODE */
+/* PROJECTS END */
+
+
+/* REGION CODE START */
+
 #ifndef CONFIG_WLAN_REGION_CODE
 #define CONFIG_WLAN_REGION_CODE 100
 #endif /* CONFIG_WLAN_REGION_CODE */
@@ -136,10 +168,20 @@
 #define BCMWAPI_WAI
 #endif /* CONFIG_WLAN_REGION_CODE >= 300 && CONFIG_WLAN_REGION_CODE < 400 */
 
+#if (CONFIG_WLAN_REGION_CODE == 402) /* TMO */
+#undef CUSTOM_SUSPEND_BCN_LI_DTIM
+#define CUSTOM_SUSPEND_BCN_LI_DTIM 3
+#endif /* CONFIG_WLAN_REGION_CODE == 402 */
+
+/* REGION CODE END */
+
+
 #if !defined(READ_MACADDR) && !defined(WRITE_MACADDR) && !defined(RDWR_KORICS_MACADDR) \
 	&& !defined(RDWR_MACADDR)
 #define GET_MAC_FROM_OTP
 #define SHOW_NVRAM_TYPE
 #endif /* !READ_MACADDR && !WRITE_MACADDR && !RDWR_KORICS_MACADDR && !RDWR_MACADDR */
+
+#define WRITE_WLANINFO
 
 #endif /* _dhd_sec_feature_h_ */

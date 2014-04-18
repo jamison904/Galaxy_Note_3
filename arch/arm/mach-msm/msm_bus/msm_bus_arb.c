@@ -21,7 +21,6 @@
 #include <linux/clk.h>
 #include <mach/msm_bus.h>
 #include "msm_bus_core.h"
-#include <linux/rtmutex.h>
 
 #define INDEX_MASK 0x0000FFFF
 #define PNODE_MASK 0xFFFF0000
@@ -43,7 +42,7 @@
 #define IS_SLAVE_VALID(slv) \
 	(((slv >= MSM_BUS_SLAVE_FIRST) && (slv <= MSM_BUS_SLAVE_LAST)) ? 1 : 0)
 
-static DEFINE_RT_MUTEX(msm_bus_lock);
+static DEFINE_MUTEX(msm_bus_lock);
 
 /* This function uses shift operations to divide 64 bit value for higher
  * efficiency. The divisor expected are number of ports or bus-width.
@@ -345,23 +344,11 @@ static int update_path(int curr, int pnode, uint64_t req_clk, uint64_t req_bw,
 		return -ENXIO;
 	}
 
-	/* Set mode flag if requested ib is lower than threshold.
-	 * If lower than threshold don't do anything. */
-	if (req_clk < info->node_info->th) {
-		info->thresh_flag = 1;
-		if (info->node_info->id == 1 || info->node_info->id == 2)
-		MSM_BUS_DBG("AXI: Node: %d, threshold flag set\n",
-			info->node_info->id);
-	} else {
-		if (info->node_info->id == 1 || info->node_info->id == 2)
-			MSM_BUS_DBG("AXI: Node: %d, threshold flag reset\n",
-				info->node_info->id);
-		info->thresh_flag = 0;
-	}
-
-	/* If master supports dual configuration, check if
+	/**
+	 * If master supports dual configuration, check if
 	 * the configuration needs to be changed based on
-	 * incoming requests */
+	 * incoming requests
+	 */
 	if (info->node_info->dual_conf)
 		fabdev->algo->config_master(fabdev, info,
 			req_clk, req_bw);
@@ -526,7 +513,7 @@ uint32_t msm_bus_scale_register_client(struct msm_bus_scale_pdata *pdata)
 		return 0;
 	}
 
-	rt_mutex_lock(&msm_bus_lock);
+	mutex_lock(&msm_bus_lock);
 	client->pdata = pdata;
 	client->curr = -1;
 	for (i = 0; i < pdata->usecase->num_paths; i++) {
@@ -582,14 +569,14 @@ uint32_t msm_bus_scale_register_client(struct msm_bus_scale_pdata *pdata)
 	}
 	msm_bus_dbg_client_data(client->pdata, MSM_BUS_DBG_REGISTER,
 		(uint32_t)client);
-	rt_mutex_unlock(&msm_bus_lock);
+	mutex_unlock(&msm_bus_lock);
 	MSM_BUS_DBG("ret: %u num_paths: %d\n", (uint32_t)client,
 		pdata->usecase->num_paths);
 	return (uint32_t)(client);
 err:
 	kfree(client->src_pnode);
 	kfree(client);
-	rt_mutex_unlock(&msm_bus_lock);
+	mutex_unlock(&msm_bus_lock);
 	return 0;
 }
 EXPORT_SYMBOL(msm_bus_scale_register_client);
@@ -615,7 +602,7 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 		return -ENXIO;
 	}
 
-	rt_mutex_lock(&msm_bus_lock);
+	mutex_lock(&msm_bus_lock);
 	if (client->curr == index)
 		goto err;
 
@@ -637,12 +624,6 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 		cl, index, client->curr, client->pdata->usecase->num_paths);
 
 	for (i = 0; i < pdata->usecase->num_paths; i++) {
-		MSM_BUS_DBG("cl: %u master_id: %d slave_id: %d ib: %llu ab: %llu\n",
-			cl, client->pdata->usecase[index].vectors[i].src,
-			client->pdata->usecase[index].vectors[i].dst,
-			client->pdata->usecase[index].vectors[i].ib,
-			client->pdata->usecase[index].vectors[i].ab);
-
 		src = msm_bus_board_get_iid(client->pdata->usecase[index].
 			vectors[i].src);
 		if (src == -ENXIO) {
@@ -694,7 +675,7 @@ int msm_bus_scale_client_update_request(uint32_t cl, unsigned index)
 	bus_for_each_dev(&msm_bus_type, NULL, NULL, msm_bus_commit_fn);
 
 err:
-	rt_mutex_unlock(&msm_bus_lock);
+	mutex_unlock(&msm_bus_lock);
 	return ret;
 }
 EXPORT_SYMBOL(msm_bus_scale_client_update_request);
@@ -834,55 +815,12 @@ void msm_bus_scale_unregister_client(uint32_t cl)
 		msm_bus_scale_client_update_request(cl, 0);
 
 	MSM_BUS_DBG("Unregistering client %d\n", cl);
-	rt_mutex_lock(&msm_bus_lock);
+	mutex_lock(&msm_bus_lock);
 	msm_bus_scale_client_reset_pnodes(cl);
 	msm_bus_dbg_client_data(client->pdata, MSM_BUS_DBG_UNREGISTER, cl);
-	rt_mutex_unlock(&msm_bus_lock);
+	mutex_unlock(&msm_bus_lock);
 	kfree(client->src_pnode);
 	kfree(client);
 }
 EXPORT_SYMBOL(msm_bus_scale_unregister_client);
 
-int msm_bus_set_thresh(int id, u64 thresh)
-{
-	struct msm_bus_fabric_device *fabdev;
-	struct msm_bus_inode_info *info;
-	int fabid = GET_FABID(id);
-
-	fabdev = msm_bus_get_fabric_device(fabid);
-	if (!fabdev) {
-		MSM_BUS_WARN("Fabric Not Found\n");
-		return -ENXIO;
-	}
-
-	info = fabdev->algo->find_node(fabdev, id);
-	if (ZERO_OR_NULL_PTR(info)) {
-		MSM_BUS_ERR("Node %d not found\n", id);
-		return -ENXIO;
-	}
-
-	info->node_info->th = thresh;
-
-	return 0;
-}
-
-u64 msm_bus_get_thresh(int id)
-{
-	struct msm_bus_fabric_device *fabdev;
-	struct msm_bus_inode_info *info;
-	int fabid = GET_FABID(id);
-
-	fabdev = msm_bus_get_fabric_device(fabid);
-	if (!fabdev) {
-		MSM_BUS_WARN("Fabric Not Found\n");
-		return -ENXIO;
-	}
-
-	info = fabdev->algo->find_node(fabdev, id);
-	if (ZERO_OR_NULL_PTR(info)) {
-		MSM_BUS_ERR("Node %d not found\n", id);
-		return -ENXIO;
-	}
-
-	return info->node_info->th;
-}

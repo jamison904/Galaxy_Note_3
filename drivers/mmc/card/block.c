@@ -50,17 +50,6 @@
 #include "../core/core.h"
 
 MODULE_ALIAS("mmc:block");
-#if defined(CONFIG_MMC_CPRM)
-#include "cprmdrv_samsung.h"
-#include <linux/ioctl.h>
-#define MMC_IOCTL_BASE		0xB3 /* Same as MMC block device major number */
-#define MMC_IOCTL_GET_SECTOR_COUNT	_IOR(MMC_IOCTL_BASE, 100, int)
-#define MMC_IOCTL_GET_SECTOR_SIZE		_IOR(MMC_IOCTL_BASE, 101, int)
-#define MMC_IOCTL_GET_BLOCK_SIZE		_IOR(MMC_IOCTL_BASE, 102, int)
-#define MMC_IOCTL_SET_RETRY_AKE_PROCESS		_IOR(MMC_IOCTL_BASE, 104, int)
-
-static int cprm_ake_retry_flag;
-#endif
 #ifdef MODULE_PARAM_PREFIX
 #undef MODULE_PARAM_PREFIX
 #endif
@@ -1063,7 +1052,7 @@ static int mmc_blk_ioctl(struct block_device *bdev, fmode_t mode,
 		ret = mmc_blk_ioctl_cmd(bdev, (struct mmc_ioc_cmd __user *)arg);
 	else if (cmd == MMC_IOC_RPMB_CMD)
 		ret = mmc_blk_ioctl_rpmb_cmd(bdev,
-				(struct mmc_ioc_rpmb __user *)arg);
+				(struct mmc_ioc_rpmb __user *)arg);	
 	else if(cmd == MMC_IOC_CLOCK)
 	{
 		unsigned int clock = (unsigned int)arg;
@@ -1866,6 +1855,13 @@ static int mmc_blk_update_interrupted_req(struct mmc_card *card,
 		 ext_csd[EXT_CSD_CORRECTLY_PRG_SECTORS_NUM + 2] << 16 |
 		 ext_csd[EXT_CSD_CORRECTLY_PRG_SECTORS_NUM + 3] << 24);
 
+	/*
+	 * skip packed command header (1 sector) included by the counter but not
+	 * actually written to the NAND
+	 */
+	if (correctly_done >= card->ext_csd.data_sector_size)
+		correctly_done -= card->ext_csd.data_sector_size;
+
 	list_for_each_entry(prq, &mq_rq->packed_list, queuelist) {
 		if ((correctly_done - (int)blk_rq_bytes(prq)) < 0) {
 			/* prq is not successfull */
@@ -1947,7 +1943,7 @@ static void mmc_blk_rw_rq_prep(struct mmc_queue_req *mqrq,
 		(md->flags & MMC_BLK_REL_WR);
 
 	spin_lock_irqsave(&card->host->mrq_lock, flags);
-	
+
 	memset(brq, 0, sizeof(struct mmc_blk_request));
 	brq->mrq.cmd = &brq->cmd;
 	brq->mrq.data = &brq->data;
@@ -2077,7 +2073,7 @@ static void mmc_blk_rw_rq_prep(struct mmc_queue_req *mqrq,
 	mqrq->mmc_active.mrq = &brq->mrq;
 	mqrq->mmc_active.cmd_flags = req->cmd_flags;
 
-	spin_unlock_irqrestore(&card->host->mrq_lock,flags);
+	spin_unlock_irqrestore(&card->host->mrq_lock, flags);
 
 	if (mq->err_check_fn)
 		mqrq->mmc_active.err_check = mq->err_check_fn;
@@ -2998,8 +2994,8 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
 	if (mmc_host_cmd23(card->host)) {
 		if (mmc_card_mmc(card) ||
 		    (mmc_card_sd(card) &&
-			card->scr.cmds & SD_SCR_CMD23_SUPPORT &&
-			mmc_sd_card_uhs(card)))
+		     card->scr.cmds & SD_SCR_CMD23_SUPPORT &&
+		     mmc_sd_card_uhs(card)))
 			md->flags |= MMC_BLK_CMD23;
 	}
 
@@ -3016,8 +3012,11 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
  err_putdisk:
 	put_disk(md->disk);
  err_kfree:
+	if (!subname)
+		__clear_bit(md->name_idx, name_use);
 	kfree(md);
  out:
+	__clear_bit(devidx, dev_use);
 	return ERR_PTR(ret);
 }
 
@@ -3230,6 +3229,7 @@ force_ro_fail:
 #define CID_MANFID_TOSHIBA	0x11
 #define CID_MANFID_MICRON	0x13
 #define CID_MANFID_SAMSUNG	0x15
+#define CID_MANFID_HYNIX	0x90
 
 static const struct mmc_fixup blk_fixups[] =
 {
@@ -3292,6 +3292,8 @@ static const struct mmc_fixup blk_fixups[] =
 	MMC_FIXUP("VZL00M", CID_MANFID_SAMSUNG, CID_OEMID_ANY, add_quirk_mmc,
 		  MMC_QUIRK_SEC_ERASE_TRIM_BROKEN),
 
+	MMC_FIXUP(CID_NAME_ANY, CID_MANFID_HYNIX, CID_OEMID_ANY, add_quirk_mmc,
+			MMC_QUIRK_BROKEN_DATA_TIMEOUT),
 	END_FIXUP
 };
 
@@ -3463,11 +3465,11 @@ static void mmc_blk_shutdown(struct mmc_card *card)
 
 	/* Silent the block layer */
 	if (md) {
-		rc = mmc_queue_suspend(&md->queue);
+		rc = mmc_queue_suspend(&md->queue, 1);
 		if (rc)
 			goto suspend_error;
 		list_for_each_entry(part_md, &md->part, part) {
-			rc = mmc_queue_suspend(&part_md->queue);
+			rc = mmc_queue_suspend(&part_md->queue, 1);
 			if (rc)
 				goto suspend_error;
 		}
@@ -3494,11 +3496,11 @@ static int mmc_blk_suspend(struct mmc_card *card)
 	int rc = 0;
 
 	if (md) {
-		rc = mmc_queue_suspend(&md->queue);
+		rc = mmc_queue_suspend(&md->queue, 0);
 		if (rc)
 			goto out;
 		list_for_each_entry(part_md, &md->part, part) {
-			rc = mmc_queue_suspend(&part_md->queue);
+			rc = mmc_queue_suspend(&part_md->queue, 0);
 			if (rc)
 				goto out_resume;
 		}

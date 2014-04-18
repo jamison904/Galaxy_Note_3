@@ -102,6 +102,9 @@ struct cpufreq_policy {
 	unsigned int		cur;    /* in kHz, only needed if cpufreq
 					 * governors are used */
 	unsigned int            util;  /* CPU utilization at max frequency */
+#ifdef CONFIG_SEC_PM
+	unsigned int            load_at_max;  /* CPU utilization at max frequency */
+#endif
 	unsigned int		policy; /* see above */
 	struct cpufreq_governor	*governor; /* see below */
 
@@ -295,7 +298,7 @@ __ATTR(_name, _perm, show_##_name, NULL)
 
 #define cpufreq_freq_attr_rw(_name)		\
 static struct freq_attr _name =			\
-__ATTR(_name, 0666, show_##_name, store_##_name)
+__ATTR(_name, 0644, show_##_name, store_##_name)
 
 struct global_attr {
 	struct attribute attr;
@@ -311,7 +314,7 @@ __ATTR(_name, 0444, show_##_name, NULL)
 
 #define define_one_global_rw(_name)		\
 static struct global_attr _name =		\
-__ATTR(_name, 0666, show_##_name, store_##_name)
+__ATTR(_name, 0644, show_##_name, store_##_name)
 
 
 /*********************************************************************
@@ -345,31 +348,14 @@ static inline unsigned int cpufreq_quick_get_max(unsigned int cpu)
 }
 #endif
 
-#ifdef CONFIG_SEC_DVFS
+#if defined (CONFIG_SEC_DVFS) || defined (CONFIG_CPU_FREQ_LIMIT_USERSPACE)
 enum {
 	BOOT_CPU = 0,
 };
 
-int get_max_freq(void);
-int get_min_freq(void);
-
-#define MAX_FREQ_LIMIT		get_max_freq() /* 1512000 */
-#define MIN_FREQ_LIMIT		get_min_freq() /* 384000 */
-
 #define MIN_TOUCH_LIMIT		1728000
+#define MIN_TOUCH_HIGH_LIMIT	2265600
 #define MIN_TOUCH_LIMIT_SECOND	1190400
-
-#define MIN_LTETP_LIMIT		1190400
-#define MIN_LTETP_LOCK		0xFF
-#define MIN_LTETP_UNLOCK	(MIN_LTETP_LOCK-1)
-
-#ifdef CONFIG_TARGET_SERIES_DALI
-#define MAX_UNICPU_LIMIT	1188000
-#else
-#define MAX_UNICPU_LIMIT	1242000
-#endif
-
-#define UPDATE_NOW_BITS		0xFF
 
 enum {
 	DVFS_NO_ID			= 0,
@@ -389,13 +375,8 @@ enum {
 
 
 int set_freq_limit(unsigned long id, unsigned int freq);
-
-unsigned int get_min_lock(void);
-unsigned int get_max_lock(void);
-void set_min_lock(int freq);
-void set_max_lock(int freq);
-
 #endif
+
 
 /*********************************************************************
  *                       CPUFREQ DEFAULT GOVERNOR                    *
@@ -426,14 +407,7 @@ extern struct cpufreq_governor cpufreq_gov_conservative;
 #elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE)
 extern struct cpufreq_governor cpufreq_gov_interactive;
 #define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_interactive)
-#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVEX)
-extern struct cpufreq_governor cpufreq_gov_conservativex;
-#define CPUFREQ_DEFAULT_GOVERNOR	(&cpufreq_gov_conservativex)
-#elif defined(CONFIG_CPU_FREQ_DEFAULT_GOV_LIONHEART)
-extern struct cpufreq_governor cpufreq_gov_lionheart;
-#define CPUFREQ_DEFAULT_GOVERNOR  (&cpufreq_gov_lionheart)
 #endif
-
 
 
 /*********************************************************************

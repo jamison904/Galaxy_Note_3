@@ -20,7 +20,7 @@
 * software in any way with any other Broadcom software provided under a license
 * other than the GPL, without Broadcom's express prior written consent.
 *
-* $Id: dhd_custom_gpio.c 417465 2013-08-09 11:47:27Z $
+* $Id: dhd_custom_gpio.c 441177 2013-12-05 07:03:52Z $
 */
 
 #include <typedefs.h>
@@ -135,7 +135,7 @@ dhd_customer_gpio_wlan_ctrl(int onoff)
 			WL_TRACE(("%s: callc customer specific GPIO to remove WLAN RESET\n",
 				__FUNCTION__));
 #if defined(CUSTOMER_HW4)
-			wifi_set_power(1, 200);
+			wifi_set_power(1, WIFI_TURNON_DELAY);
 #endif
 			WL_ERROR(("=========== WLAN going back to live  ========\n"));
 		break;
@@ -164,7 +164,7 @@ dhd_custom_get_mac_address(unsigned char *buf)
 		return -EINVAL;
 
 	/* Customer access to MAC address stored outside of DHD driver */
-#if 0 && (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35))
+#if (0 || 0) && (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 35))
 	ret = wifi_get_mac_addr(buf);
 #endif
 

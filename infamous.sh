@@ -1,10 +1,10 @@
 #!/bin/sh
 export PLATFORM="TW"
-export MREV="JB4.3"
+export MREV="KITKAT"
 export CURDATE=`date "+%m.%d.%Y"`
 export MUXEDNAMELONG="-BioShock-N900T$MREV-$PLATFORM-$CARRIER-$CURDATE"
 export MUXEDNAMESHRT="-BioShock-N900T$MREV-$PLATFORM-$CARRIER*"
-export KTVER="_BioShock_4.0-"
+export KTVER="_BioShock_5.0-"
 export KERNELDIR=`readlink -f .`
 export PARENT_DIR=`readlink -f ..`
 export INITRAMFS_DEST=$KERNELDIR/kernel/usr/initramfs
@@ -45,7 +45,7 @@ rm $PACKAGEDIR/zImage
 rm arch/arm/boot/zImage
 
 echo "Make the kernel"
-make bio_defconfig VARIANT_DEFCONFIG=msm8974_sec_hltetmo_defconfig DEBUG_DEFCONFIG= SELINUX_DEFCONFIG=selinux_defconfig  SELINUX_LOG_DEFCONFIG=selinux_log_defconfig TIMA_DEFCONFIG=tima_defconfig
+make bioShock_defconfig VARIANT_DEFCONFIG=msm8974_sec_defconfig DEBUG_DEFCONFIG= SELINUX_DEFCONFIG=selinux_defconfig  SELINUX_LOG_DEFCONFIG=selinux_log_defconfig TIMA_DEFCONFIG=tima_defconfig
 
 
 echo "Modding .config file - "$KTVER

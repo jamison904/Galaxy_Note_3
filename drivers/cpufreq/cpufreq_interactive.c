@@ -122,8 +122,10 @@ static u64 boostpulse_endtime;
 #define DEFAULT_TIMER_SLACK (4 * DEFAULT_TIMER_RATE)
 static int timer_slack_val = DEFAULT_TIMER_SLACK;
 
-#define DEFAULT_SCREEN_OFF_MAX 1267200
+#define TOP_STOCK_FREQ 2265600
+#define DEFAULT_SCREEN_OFF_MAX 2265600
 static unsigned long screen_off_max = DEFAULT_SCREEN_OFF_MAX;
+
 static bool io_is_busy;
 
 /*
@@ -139,7 +141,15 @@ static unsigned int up_threshold_any_cpu_freq = 1728000;
 static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		unsigned int event);
 
-static bool io_is_busy;
+#ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE
+static
+#endif
+struct cpufreq_governor cpufreq_gov_interactive = {
+	.name = "interactiveX",
+	.governor = cpufreq_governor_interactive,
+	.max_transition_latency = 10000000,
+	.owner = THIS_MODULE,
+};
 
 static inline cputime64_t get_cpu_idle_time_jiffy(unsigned int cpu,
 						  cputime64_t *wall)
@@ -360,6 +370,9 @@ static u64 update_load(int cpu)
 	unsigned int delta_idle;
 	unsigned int delta_time;
 	u64 active_time;
+#ifdef CONFIG_SEC_PM
+	unsigned int cur_load = 0;
+#endif
 
 	now_idle = get_cpu_idle_time(cpu, &now);
 	delta_idle = (unsigned int)(now_idle - pcpu->time_in_idle);
@@ -374,6 +387,13 @@ static u64 update_load(int cpu)
 
 	pcpu->time_in_idle = now_idle;
 	pcpu->time_in_idle_timestamp = now;
+
+#ifdef CONFIG_SEC_PM
+	cur_load = (unsigned int)(active_time * 100) / delta_time;
+	pcpu->policy->load_at_max = (cur_load * pcpu->policy->cur) /
+		pcpu->policy->cpuinfo.max_freq;
+#endif
+
 	return now;
 }
 
@@ -415,6 +435,10 @@ static void cpufreq_interactive_timer(unsigned long data)
 	pcpu->prev_load = cpu_load;
 	boosted = boost_val || now < boostpulse_endtime;
 
+#ifdef CONFIG_SEC_PM
+	pcpu->policy->util = cpu_load;
+#endif
+
 	if (cpu_load >= go_hispeed_load || boosted) {
 		if (pcpu->target_freq < hispeed_freq) {
 			new_freq = hispeed_freq;
@@ -424,6 +448,8 @@ static void cpufreq_interactive_timer(unsigned long data)
 			if (new_freq < hispeed_freq)
 				new_freq = hispeed_freq;
 		}
+		if (new_freq > TOP_STOCK_FREQ && cpu_load < 99)
+			new_freq = TOP_STOCK_FREQ;
 	} else {
 		new_freq = choose_freq(pcpu, loadadjfreq);
 
@@ -440,7 +466,7 @@ static void cpufreq_interactive_timer(unsigned long data)
 					continue;
 
 				max_load = max(max_load, picpu->prev_load);
-				max_freq = max(max_freq, picpu->policy->cur);
+				max_freq = max(max_freq, picpu->target_freq);
 			}
 
 			if (max_freq > up_threshold_any_cpu_freq &&
@@ -893,7 +919,7 @@ static ssize_t store_hispeed_freq(struct kobject *kobj,
 	return count;
 }
 
-static struct global_attr hispeed_freq_attr = __ATTR(hispeed_freq, 0666,
+static struct global_attr hispeed_freq_attr = __ATTR(hispeed_freq, 0644,
 		show_hispeed_freq, store_hispeed_freq);
 
 static ssize_t show_sampling_down_factor(struct kobject *kobj,
@@ -939,7 +965,7 @@ static ssize_t store_go_hispeed_load(struct kobject *kobj,
 	return count;
 }
 
-static struct global_attr go_hispeed_load_attr = __ATTR(go_hispeed_load, 0666,
+static struct global_attr go_hispeed_load_attr = __ATTR(go_hispeed_load, 0644,
 		show_go_hispeed_load, store_go_hispeed_load);
 
 static ssize_t show_min_sample_time(struct kobject *kobj,
@@ -961,7 +987,7 @@ static ssize_t store_min_sample_time(struct kobject *kobj,
 	return count;
 }
 
-static struct global_attr min_sample_time_attr = __ATTR(min_sample_time, 0666,
+static struct global_attr min_sample_time_attr = __ATTR(min_sample_time, 0644,
 		show_min_sample_time, store_min_sample_time);
 
 static ssize_t show_timer_rate(struct kobject *kobj,
@@ -983,7 +1009,7 @@ static ssize_t store_timer_rate(struct kobject *kobj,
 	return count;
 }
 
-static struct global_attr timer_rate_attr = __ATTR(timer_rate, 0666,
+static struct global_attr timer_rate_attr = __ATTR(timer_rate, 0644,
 		show_timer_rate, store_timer_rate);
 
 static ssize_t show_timer_slack(
@@ -1124,7 +1150,7 @@ static ssize_t store_io_is_busy(struct kobject *kobj,
 	return count;
 }
 
-static struct global_attr io_is_busy_attr = __ATTR(io_is_busy, 0666,
+static struct global_attr io_is_busy_attr = __ATTR(io_is_busy, 0644,
 		show_io_is_busy, store_io_is_busy);
 
 static ssize_t show_sync_freq(struct kobject *kobj,
@@ -1270,6 +1296,8 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			pcpu->hispeed_validate_time =
 				pcpu->floor_validate_time;
 			down_write(&pcpu->enable_sem);
+			del_timer_sync(&pcpu->cpu_timer);
+			del_timer_sync(&pcpu->cpu_slack_timer);
 			cpufreq_interactive_timer_start(j);
 			pcpu->governor_enabled = 1;
 			up_write(&pcpu->enable_sem);
@@ -1303,6 +1331,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			pcpu = &per_cpu(cpuinfo, j);
 			down_write(&pcpu->enable_sem);
 			pcpu->governor_enabled = 0;
+			pcpu->target_freq = 0;
 			del_timer_sync(&pcpu->cpu_timer);
 			del_timer_sync(&pcpu->cpu_slack_timer);
 			up_write(&pcpu->enable_sem);
@@ -1361,16 +1390,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 	return 0;
 }
 
-#ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE
-static
-#endif
-struct cpufreq_governor cpufreq_gov_interactive = {
-	.name = "interactiveX",
-	.governor = cpufreq_governor_interactive,
-	.max_transition_latency = 10000000,
-	.owner = THIS_MODULE,
-};
-
 static void cpufreq_interactive_nop_timer(unsigned long data)
 {
 }
@@ -1381,6 +1400,7 @@ static int __init cpufreq_interactive_init(void)
 	struct cpufreq_interactive_cpuinfo *pcpu;
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
 
+	cpufreq_screen_on = true;
 	/* Initalize per-cpu timers */
 	for_each_possible_cpu(i) {
 		pcpu = &per_cpu(cpuinfo, i);

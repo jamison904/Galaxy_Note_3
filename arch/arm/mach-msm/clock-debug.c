@@ -23,21 +23,11 @@
 #include <linux/clkdev.h>
 #include <linux/uaccess.h>
 #include <linux/mutex.h>
+#include <linux/io.h>
 
 #include <mach/clk-provider.h>
 
 #include "clock.h"
-
-#ifdef PM_EMERGENCY_CXO_OFF
-#include "clock-rpm.h" //ALRAN
-struct clk_rpmrs_data {
-  int (*set_rate_fn)(struct rpm_clk *r, uint32_t value, uint32_t context);
-  int (*get_rate_fn)(struct rpm_clk *r);
-  int (*handoff_fn)(struct rpm_clk *r);
-  int ctx_active_id;
-  int ctx_sleep_id;
-};
-#endif
 
 static LIST_HEAD(clk_list);
 static DEFINE_SPINLOCK(clk_list_lock);
@@ -278,6 +268,29 @@ static int clock_debug_print_clock(struct clk *c, struct seq_file *m)
 	return 1;
 }
 
+int clock_debug_print_clock2(struct clk *c)
+{
+	char *start = "";
+
+	if (!c)
+		return 0;
+	pr_info("\n");
+	do {
+		if (c->vdd_class)
+			pr_info("%s%s:%u:%u [%ld, %lu]", start, c->dbg_name,
+				c->prepare_count, c->count, c->rate,
+				c->vdd_class->cur_level);
+		else
+		pr_info("%s%s:%u:%u [%ld]", start, c->dbg_name,
+		c->prepare_count, c->count, c->rate);
+		start = " -> ";
+	} while ((c = clk_get_parent(c)));
+
+	pr_cont("\n");
+
+return 1;
+} 
+
 /**
  * clock_debug_print_enabled_clocks() - Print names of enabled clocks
  *
@@ -423,6 +436,56 @@ static const struct file_operations clock_parent_fops = {
 	.write		= clock_parent_write,
 };
 
+void clk_debug_print_hw(struct clk *clk, struct seq_file *f)
+{
+	void __iomem *base;
+	struct clk_register_data *regs;
+	u32 i, j, size;
+
+	if (IS_ERR_OR_NULL(clk))
+		return;
+
+	clk_debug_print_hw(clk->parent, f);
+
+	clock_debug_output(f, false, "%s\n", clk->dbg_name);
+
+	if (!clk->ops->list_registers)
+		return;
+
+	j = 0;
+	base = clk->ops->list_registers(clk, j, &regs, &size);
+	while (!IS_ERR(base)) {
+		for (i = 0; i < size; i++) {
+			u32 val = readl_relaxed(base + regs[i].offset);
+			clock_debug_output(f, false, "%20s: 0x%.8x\n",
+						regs[i].name, val);
+		}
+		j++;
+		base = clk->ops->list_registers(clk, j, &regs, &size);
+	}
+}
+
+static int print_hw_show(struct seq_file *m, void *unused)
+{
+	struct clk *c = m->private;
+	clk_debug_print_hw(c, m);
+
+	return 0;
+}
+
+static int print_hw_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, print_hw_show, inode->i_private);
+}
+
+static const struct file_operations clock_print_hw_fops = {
+	.open		= print_hw_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= seq_release,
+};
+
+
 static int clock_debug_add(struct clk *clock)
 {
 	char temp[50], *ptr;
@@ -472,6 +535,10 @@ static int clock_debug_add(struct clk *clock)
 
 	if (!debugfs_create_file("parent", S_IRUGO, clk_dir, clock,
 				&clock_parent_fops))
+			goto error;
+
+	if (!debugfs_create_file("print", S_IRUGO, clk_dir, clock,
+				&clock_print_hw_fops))
 			goto error;
 
 	return 0;
@@ -551,151 +618,6 @@ int clock_debug_register(struct clk_lookup *table, size_t size)
 out:
 	mutex_unlock(&clk_debug_lock);
 	return ret;
-}
-
-#ifdef PM_EMERGENCY_CXO_OFF
-/**
- * Now, we're sure that cxo has been not used
- * but sometimes cxo was turned on, just discount 1.
- * ALRAN
- */
-
-void emergency_cxo_off(void)
-{
-	struct clk *c;
-	struct clk_table *table;
-	unsigned long flags;
-	int i, ret = 1;
-
-	//pr_err("we are here %s\n", __func__);
-	spin_lock_irqsave(&clk_list_lock, flags);
-	list_for_each_entry(table, &clk_list, node) {
-		for (i = 0; i < table->num_clocks; i++) {
-			c = table->clocks[i].clk;
-			if (!c || !c->prepare_count)
-				continue;
-
-			do {
-				if (!strncmp("cxo_clk_src", c->dbg_name, 11))
-					ret = 0;
-			} while ((c = clk_get_parent(c)));
-		}
-	}
-	spin_unlock_irqrestore(&clk_list_lock, flags);
-	pr_err("cxo_clk_src has children? %s\n", ret?"no":"yes");
-
-	if (ret) {
-		c = clk_get_sys("emergency", "cxo_check");
-		if (IS_ERR(c)) {
-			ret = PTR_ERR(c);
-			c = NULL;
-			pr_info("clk_get_sys cxo_check faild %d", ret);
-			return;
-		}
-		else {
-			struct rpm_clk *r = to_rpm_clk(c);
-			if (c->prepare_count) {
-				pr_info("Disable cxo once for emergency, prepare_count[%d]\n", c->prepare_count);
-				clk_disable_unprepare(c);
-				pr_cont("->[%d]\n", c->prepare_count);
-			}
-
-			(r->rpmrs_data)->set_rate_fn(r, 0, (r->rpmrs_data)->ctx_sleep_id);
-			pr_info("send XO 0 sleep set one more\n");
-
-			clk_put(c);
-		}
-
-	}
-}
-#endif
-
-static int clock_debug_seqprint_clock(struct seq_file *m, struct clk_lookup *cl)
-{
-	char *start = "";
-	struct clk *c = cl->clk;
-	int dev = !(cl->dev_id == NULL);
-
-	if (!c || !c->prepare_count)
-		return 0;
-
-	seq_printf(m, "\t");
-	do {
-		if (c->vdd_class)
-			seq_printf(m, "%s%s%s%s:%u:%u [%ld, %lu]", start,
-					c->dbg_name,
-					dev ? ":" : "",
-					dev ? cl->dev_id : "",
-					c->prepare_count, c->count, c->rate,
-					c->vdd_class->cur_level);
-		else
-			seq_printf(m, "%s%s%s%s:%u:%u [%ld]", start, c->dbg_name,
-					dev ? ":" : "",
-					dev ? cl->dev_id : "",
-					c->prepare_count, c->count, c->rate);
-		start = " -> ";
-		dev = 0;
-	} while ((c = clk_get_parent(c)));
-	seq_printf(m, "\n");
-
-	return 1;
-}
-
-static int clock_debug_active_show(struct seq_file *m, void *unused)
-{
-	struct clk_table *table;
-	unsigned long flags;
-	int i, cnt = 0;
-
-	seq_printf(m, "Enabled clocks:\n");
-	spin_lock_irqsave(&clk_list_lock, flags);
-	list_for_each_entry(table, &clk_list, node) {
-		for (i = 0; i < table->num_clocks; i++)
-			cnt += clock_debug_seqprint_clock(m, &table->clocks[i]);
-	}
-	spin_unlock_irqrestore(&clk_list_lock, flags);
-
-	if (cnt)
-		seq_printf(m, "Enabled clock count: %d\n", cnt);
-	else
-		seq_printf(m, "No clocks enabled.\n");
-
-	return 0;
-}
-
-static int clock_debug_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, clock_debug_active_show, inode->i_private);
-}
-
-static const struct file_operations clock_debug_fops = {
-	.open		= clock_debug_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= seq_release,
-};
-
-int clock_debug_print_clock2(struct clk *c)
-{
-       char *start = "";
-
-       if (!c)
-               return 0;
-       pr_info("\n");
-       do {
-               if (c->vdd_class)
-                       pr_info("%s%s:%u:%u [%ld, %lu]", start, c->dbg_name,
-                               c->prepare_count, c->count, c->rate,
-                               c->vdd_class->cur_level);
-               else
-               pr_info("%s%s:%u:%u [%ld]", start, c->dbg_name,
-               c->prepare_count, c->count, c->rate);
-               start = " -> ";
-       } while ((c = clk_get_parent(c)));
-
-       pr_cont("\n");
-
-return 1;
 }
 
 /*
