@@ -1,0 +1,96 @@
+--- mm/memory.c
++++ mm/memory.c
+@@ -774,8 +828,10 @@
+ #ifndef is_zero_pfn
+ static inline int is_zero_pfn(unsigned long pfn)
+ {
+-	return pfn == zero_pfn;
++	return (pfn == zero_pfn) || (is_pksm_zero_pfn(pfn));
+ }
++#else
++#define is_zero_pfn(pfn)   (is_zero_pfn(pfn) || is_pksm_zero_pfn(pfn))
+ #endif
+ 
+ #ifndef my_zero_pfn
+@@ -961,7 +1017,8 @@
+ 			rss[MM_ANONPAGES]++;
+ 		else
+ 			rss[MM_FILEPAGES]++;
+-	}
++	} else 
++		pksm_map_zero_page(pte);
+ 
+ out_set_pte:
+ 	set_pte_at(dst_mm, addr, dst_pte, pte);
+@@ -1196,8 +1253,10 @@
+ 			ptent = ptep_get_and_clear_full(mm, addr, pte,
+ 							tlb->fullmm);
+ 			tlb_remove_tlb_entry(tlb, pte, addr);
+-			if (unlikely(!page))
++			if (unlikely(!page)) {
++				pksm_unmap_zero_page(ptent);
+ 				continue;
++			}
+ 			if (unlikely(details) && details->nonlinear_vma
+ 			    && linear_page_index(details->nonlinear_vma,
+ 						addr) != page->index)
+@@ -1213,6 +1272,9 @@
+ 					mark_page_accessed(page);
+ 				rss[MM_FILEPAGES]--;
+ 			}
++#ifdef CONFIG_PKSM
++			pksm_unmap_sharing_page(page, mm, addr);
++#endif
+ 			page_remove_rmap(page);
+ 			if (unlikely(page_mapcount(page) < 0))
+ 				print_bad_pte(vma, addr, ptent, page);
+@@ -2762,8 +2824,10 @@
+ 				dec_mm_counter_fast(mm, MM_FILEPAGES);
+ 				inc_mm_counter_fast(mm, MM_ANONPAGES);
+ 			}
+-		} else
++		} else {
++			pksm_unmap_zero_page(orig_pte);
+ 			inc_mm_counter_fast(mm, MM_ANONPAGES);
++		}
+ 		flush_cache_page(vma, address, pte_pfn(orig_pte));
+ 		entry = mk_pte(new_page, vma->vm_page_prot);
+ 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
+@@ -2805,6 +2869,9 @@
+ 			 * mapcount is visible. So transitively, TLBs to
+ 			 * old page will be flushed before it can be reused.
+ 			 */
++#ifdef CONFIG_PKSM
++			pksm_unmap_sharing_page(old_page, mm, address);
++#endif
+ 			page_remove_rmap(old_page);
+ 		}
+ 
+@@ -3222,16 +3297,26 @@
+ 	page_add_new_anon_rmap(page, vma, address);
+ setpte:
+ 	set_pte_at(mm, address, page_table, entry);
+-
++	
+ 	/* No need to invalidate - it was non-present before */
+ 	update_mmu_cache(vma, address, page_table);
++
+ unlock:
+ 	pte_unmap_unlock(page_table, ptl);
++#ifdef CONFIG_PKSM
++	if (rmap)
++		pksm_add_new_anon_page(page, rmap, vma->anon_vma);
++#endif
+ 	return 0;
+ release:
+ 	mem_cgroup_uncharge_page(page);
+ 	page_cache_release(page);
++#ifdef CONFIG_PKSM
++	if (rmap)
++		pksm_free_rmap_item(rmap);
++#endif
+ 	goto unlock;
++
+ oom_free_page:
+ 	page_cache_release(page);
+ oom:

@@ -1,0 +1,27 @@
+--- mm/page_alloc.c
++++ mm/page_alloc.c
+@@ -1298,9 +1298,13 @@
+ 	int migratetype;
+ 	int wasMlocked = __TestClearPageMlocked(page);
+ 
++#ifdef CONFIG_PKSM
++		if (PagePKSM(page)) 
++			pksm_del_anon_page(page);
++#endif
++
+ 	if (!free_pages_prepare(page, 0))
+ 		return;
+-
+ 	migratetype = get_pageblock_migratetype(page);
+ 	set_page_private(page, migratetype);
+ 	local_irq_save(flags);
+@@ -6005,6 +6009,9 @@
+ #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+ 	{1UL << PG_compound_lock,	"compound_lock"	},
+ #endif
++#ifdef CONFIG_PKSM
++	{1UL << PG_pksm,			"pksm"		},
++#endif
+ };
+ 
+ static void dump_page_flags(unsigned long flags)
