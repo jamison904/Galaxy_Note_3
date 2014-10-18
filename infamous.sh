@@ -45,7 +45,7 @@ rm $PACKAGEDIR/zImage
 rm arch/arm/boot/zImage
 
 echo "Make the kernel"
-make bioShock_defconfig VARIANT_DEFCONFIG=msm8974_sec_defconfig DEBUG_DEFCONFIG= SELINUX_DEFCONFIG=selinux_defconfig  SELINUX_LOG_DEFCONFIG=selinux_log_defconfig TIMA_DEFCONFIG=tima_defconfig
+make bioshock_defconfig VARIANT_DEFCONFIG=msm8974_sec_defconfig DEBUG_DEFCONFIG= SELINUX_DEFCONFIG=selinux_defconfig  SELINUX_LOG_DEFCONFIG=selinux_log_defconfig TIMA_DEFCONFIG=tima_defconfig
 
 
 echo "Modding .config file - "$KTVER
